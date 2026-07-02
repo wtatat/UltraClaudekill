@@ -230,7 +230,8 @@ export class Filth extends EnemyBase {
   constructor(G, pos) {
     super(G, pos);
     this.hp = this.maxHp = 24; // one clean revolver shot
-    this.speed = randRange(12, 13.5);
+    this.speed = randRange(13, 14.5);
+    this.accel = 30;
     this.styleValue = 100;
     this.name = 'FILTH';
     this.mesh = humanoid({ skin: 0x7d9a5a, cloth: 0x3a4230, arms: false, mouth: true });
@@ -290,9 +291,13 @@ export class Filth extends EnemyBase {
         this.windup = 0.35;
         this.G.audio._tone(0.25, { from: 400, to: 950, type: 'sawtooth', gain: 0.12 }); // hiss (no parry ping: not parryable)
       } else {
+        // accelerates toward the player instead of turning on a dime,
+        // so it overshoots slightly when you dodge sideways
         const move = this.steer(toP, dist);
-        this.vel.x = move.x * this.speed;
-        this.vel.z = move.z * this.speed;
+        this.vel.x += move.x * this.accel * dt;
+        this.vel.z += move.z * this.accel * dt;
+        const hv = Math.hypot(this.vel.x, this.vel.z);
+        if (hv > this.speed) { this.vel.x *= this.speed / hv; this.vel.z *= this.speed / hv; }
       }
     }
 
@@ -312,8 +317,10 @@ export class Filth extends EnemyBase {
 }
 
 // ---------------------------------------------------------------- STRAY
-// Keeps 12-26m away, backs off when crowded. Charges an orb for half a
-// second before throwing; shoot the glowing orb to detonate the Stray.
+// Mostly stationary: it plants itself, charges an orb for half a second
+// and throws. It only shuffles when it can't see you, when you're beyond
+// its range, or slowly backpedals when you close in. It never jumps.
+// Shoot the glowing orb mid-charge to detonate the Stray.
 export class Stray extends EnemyBase {
   constructor(G, pos) {
     super(G, pos);
@@ -323,8 +330,6 @@ export class Stray extends EnemyBase {
     this.mesh = humanoid({ skin: 0xb8a794, cloth: 0x6e2f2a, eyes: 0x3fd6ff });
     this.mesh.position.copy(pos);
     G.scene.add(this.mesh);
-    this.strafeDir = Math.random() < 0.5 ? 1 : -1;
-    this.strafeT = randRange(1, 2);
     this.attackCd = randRange(1, 2);   // first throw 1-2s after spotting
     this.chargeT = 0;
     this.sawPlayer = false;
@@ -366,13 +371,10 @@ export class Stray extends EnemyBase {
     const G = this.G, P = G.player;
     if (this.dead) return;
     this.animT += dt;
-    this.strafeT -= dt;
-    if (this.strafeT <= 0) { this.strafeDir *= -1; this.strafeT = randRange(1, 2.5); }
 
     const toP = P.pos.clone().sub(this.pos);
     const dist = toP.length();
     toP.y = 0; toP.normalize();
-    const side = new THREE.Vector3(-toP.z, 0, toP.x).multiplyScalar(this.strafeDir);
     const los = hasLos(this.pos.clone().setY(this.pos.y + 0.6), P.eyePos, G.colliders);
 
     if (!los) this.sawPlayer = false;
@@ -380,7 +382,7 @@ export class Stray extends EnemyBase {
 
     const airborne = Math.abs(this.vel.y) > 4;
     if (this.chargeT > 0) {
-      // committed to the throw: stand still, glow, release
+      // committed to the throw: plant, glow, release
       this.chargeT -= dt;
       this.vel.x = 0; this.vel.z = 0;
       this.orb.visible = true;
@@ -395,29 +397,36 @@ export class Stray extends EnemyBase {
         this.attackCd = randRange(1, 2.5);
       }
     } else {
-      let move = new THREE.Vector3();
-      if (!los || dist > 26) move.copy(toP);            // approach
-      else if (dist < 12) move.copy(toP).negate();      // back off
-      move.addScaledVector(side, 0.8).normalize();
-      move = this.steer(move, dist);
-      this.vel.x = move.x * 6;
-      this.vel.z = move.z * 6;
+      // static by nature: it only shuffles when it has a reason to
+      let move = null;
+      if (!los || dist > 30) move = toP;                        // can't see / too far: approach
+      else if (dist < 9) move = toP.clone().negate();           // too close: slow backpedal
+      if (move) {
+        move = this.steer(move, dist);
+        const speed = dist < 9 ? 2.2 : 4.5;
+        this.vel.x += (move.x * speed - this.vel.x) * Math.min(1, dt * 6);
+        this.vel.z += (move.z * speed - this.vel.z) * Math.min(1, dt * 6);
+      } else {
+        this.vel.x *= Math.max(0, 1 - dt * 8);
+        this.vel.z *= Math.max(0, 1 - dt * 8);
+      }
       this.attackCd -= dt;
-      if (los && dist < 30 && this.attackCd <= 0) {
+      if (los && dist < 32 && this.attackCd <= 0) {
         this.chargeT = 0.5;
         G.audio.parryPing();
       }
     }
 
     this.vel.y -= 30 * dt;
-    const res = moveAndCollide(this.pos, this.vel, this.he, dt, G.colliders);
-    if (res.hitWall && res.onGround) this.vel.y = 7;
+    moveAndCollide(this.pos, this.vel, this.he, dt, G.colliders);
+    // no hop: a Stray never jumps
 
     this.mesh.position.copy(this.pos).y = this.pos.y - this.he.y;
     this.faceThePlayer();
     const parts = this.mesh.userData.parts;
     parts.armR.rotation.x = this.chargeT > 0 ? -2.2 : -1.4;
-    const sw = Math.sin(this.animT * 6) * 0.3;
+    const hSpd = Math.hypot(this.vel.x, this.vel.z);
+    const sw = hSpd > 0.5 ? Math.sin(this.animT * 6) * 0.3 : 0;
     parts.legL.rotation.x = sw; parts.legR.rotation.x = -sw;
     this.updateFlash(dt);
   }

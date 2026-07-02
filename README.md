@@ -26,10 +26,10 @@ python3 -m http.server 8000
 |---|---|
 | WASD | Move |
 | Mouse | Look |
-| Space | Jump; in the air near a wall — wall jump (up to 3 per airtime) |
+| Space | Jump (buffered — pressing just before landing works); near a wall in the air — wall jump (up to 3 per airtime) |
 | Shift | Dash — costs 1 of 3 stamina bars, regen 0.7/s (pauses while sliding) |
 | Ctrl or C (ground) | Slide — keeps speed, slide-jump for a boost |
-| Ctrl or C (air) | Ground slam; keep holding to come out sliding |
+| Ctrl or C (air) | Ground slam — keeps accelerating the longer it falls; keep holding to come out sliding (faster after a long fall) |
 | LMB | Fire |
 | RMB (revolver) | Hold to charge a piercing shot (3s cooldown) |
 | F | Punch. Reflects projectiles at your crosshair; parries yellow-flashing attacks |
@@ -50,6 +50,11 @@ python3 -m http.server 8000
   pays out big style. Spamming punches raises the punch cooldown.
 - **Dashing grants brief invulnerability.** Hazards do not care about
   your mercy window.
+- **Slam jump** — jump right after a slam lands to launch much higher,
+  scaling with how far you fell. Wall-jumping mid-slam converts the fall
+  into a bigger burst (slam storage).
+- **Wall cling** — hold a direction into a wall while falling to slow
+  your descent with friction; the grip wears off the longer you hang on.
 - **Enemies** (behavior researched from the original):
   - *Filth* — armless rusher, faster than your walk speed, jumping bite.
     The bite can't be parried, but **any damage cancels it**. One revolver
