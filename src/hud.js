@@ -131,6 +131,13 @@ export class Hud {
     this.el.vignette.classList.add('show');
   }
 
+  parryFlash() {
+    const el = document.getElementById('parry-flash');
+    el.classList.remove('show');
+    void el.offsetWidth;
+    el.classList.add('show');
+  }
+
   bossBar(frac, name) {
     this.el.boss.style.display = name ? 'block' : 'none';
     if (name) {

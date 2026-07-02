@@ -36,6 +36,7 @@ const G = {
   state: 'menu', // menu | playing | dead | win
   kills: 0,
   startTime: 0,
+  hitstop: 0, // brief slow-motion on parry
   spawnProjectile(pos, vel, opts) {
     G.projectiles.push(new Projectile(G, pos, vel, opts));
   },
@@ -144,6 +145,10 @@ function frame(now) {
   let dt = Math.min((now - last) / 1000, 1 / 20);
   last = now;
   const t = now / 1000;
+  if (G.hitstop > 0) {
+    G.hitstop -= dt;
+    dt *= 0.1;
+  }
 
   if (G.state === 'playing' && G.input.locked) {
     G.player.update(dt, G.input);

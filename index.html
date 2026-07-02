@@ -88,6 +88,12 @@
   }
   #damage-vignette.show { animation: dmg 0.45s ease-out; }
   @keyframes dmg { 0% { opacity: 1; } 100% { opacity: 0; } }
+  #parry-flash {
+    position: absolute; inset: 0; pointer-events: none; z-index: 4; opacity: 0;
+    background: radial-gradient(ellipse at center, rgba(255, 210, 62, 0.25) 0%, transparent 65%);
+  }
+  #parry-flash.show { animation: parryf 0.35s ease-out; }
+  @keyframes parryf { 0% { opacity: 1; } 100% { opacity: 0; } }
   body.low-hp #permanent-vignette { opacity: 1; }
   #permanent-vignette {
     position: absolute; inset: 0; pointer-events: none; z-index: 3; opacity: 0; transition: opacity 0.6s;
@@ -128,6 +134,7 @@
   <div id="crosshair"></div>
   <div id="hitmarker"></div>
   <div id="damage-vignette"></div>
+  <div id="parry-flash"></div>
   <div id="permanent-vignette"></div>
   <div id="objective"></div>
   <div id="center-msg"></div>
@@ -162,6 +169,7 @@
     <div class="hint">
       <kbd>W A S D</kbd> move &nbsp; <kbd>SPACE</kbd> jump / wall jump (x3) &nbsp; <kbd>SHIFT</kbd> dash (3 stamina)<br>
       <kbd>CTRL</kbd> or <kbd>C</kbd> slide, in air — slam &nbsp; <kbd>LMB</kbd> fire &nbsp; <kbd>RMB</kbd> charge shot &nbsp; <kbd>1</kbd>/<kbd>2</kbd>/<kbd>Q</kbd> switch weapon<br>
+      <kbd>F</kbd> punch — hit orbs to reflect them, punch a <span style="color:#ffcc22">yellow-flashing</span> enemy to parry its attack<br>
       damage enemies up close to drain their blood and heal &nbsp;&middot;&nbsp; style decays — keep moving
     </div>
     <div class="go">CLICK TO DESCEND</div>

@@ -1,5 +1,25 @@
 import * as THREE from 'three';
-import { raycastLevel, rayAabb } from './utils.js';
+import { raycastLevel, rayAabb, clamp } from './utils.js';
+
+const PUNCH_RANGE = 3.4;
+const PUNCH_DAMAGE = 12;
+const PARRY_DAMAGE = 20;
+const REFLECT_DAMAGE = 40;
+
+function buildFistModel() {
+  const g = new THREE.Group();
+  const arm = new THREE.MeshStandardMaterial({ color: 0x1c4d80, roughness: 0.4, metalness: 0.8 });
+  const glove = new THREE.MeshStandardMaterial({ color: 0x2d7fd3, roughness: 0.35, metalness: 0.85 });
+  const glow = new THREE.MeshStandardMaterial({ color: 0x59c1ff, emissive: 0x59c1ff, emissiveIntensity: 2 });
+  const forearm = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.09, 0.3), arm);
+  forearm.position.set(0, -0.02, 0.1);
+  const fist = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.11, 0.14), glove);
+  fist.position.set(0, 0, -0.1);
+  const knuckles = new THREE.Mesh(new THREE.BoxGeometry(0.115, 0.03, 0.03), glow);
+  knuckles.position.set(0, 0.035, -0.16);
+  g.add(forearm, fist, knuckles);
+  return g;
+}
 
 // Both weapons have infinite ammo; the revolver's alt-fire is a charged
 // piercing shot on a cooldown, the shotgun kicks you backwards in the air.
@@ -78,6 +98,16 @@ export class Weapons {
     this.swapT = 0;
     this._chargeTick = 0;
     this.lastShotWasAir = false;
+
+    // the left arm: quick punch, parries projectiles and telegraphed attacks
+    this.fist = buildFistModel();
+    this.fist.position.set(-0.3, -0.3, -0.35);
+    this.fist.visible = false;
+    camera.add(this.fist);
+    this.punchCd = 0;
+    this.punchAnimT = 0;
+    this.punchChain = 0;   // consecutive punches raise the cooldown
+    this.punchIdleT = 0;
   }
 
   giveShotgun() {
@@ -152,6 +182,9 @@ export class Weapons {
     this.chargeCd = Math.max(0, this.chargeCd - dt);
     this.swapT = Math.max(0, this.swapT - dt);
     this.recoil = Math.max(0, this.recoil - dt * 6);
+    this.punchCd = Math.max(0, this.punchCd - dt);
+    this.punchIdleT += dt;
+    if (this.punchIdleT > 0.9) this.punchChain = 0;
 
     if (input.justPressed('Digit1')) this.switchTo('revolver');
     if (input.justPressed('Digit2')) this.switchTo('shotgun');
@@ -159,6 +192,18 @@ export class Weapons {
 
     const origin = G.player.eyePos;
     const dir = G.player.aimDir();
+
+    // --- punch (F) ---
+    if (input.justPressed('KeyF') && this.punchCd <= 0) this._punch(origin, dir);
+    if (this.punchAnimT > 0) {
+      this.punchAnimT -= dt;
+      const k = Math.max(0, this.punchAnimT / 0.22);
+      this.fist.visible = true;
+      this.fist.position.z = -0.35 - Math.sin((1 - k) * Math.PI) * 0.38;
+      this.fist.position.x = -0.3 + Math.sin((1 - k) * Math.PI) * 0.16;
+      this.fist.rotation.x = Math.sin((1 - k) * Math.PI) * 0.2;
+      if (this.punchAnimT <= 0) this.fist.visible = false;
+    }
 
     // --- revolver charge (RMB) ---
     if (this.current === 'revolver') {
@@ -192,6 +237,80 @@ export class Weapons {
     this.rig.rotation.x = this.recoil * 0.35;
     if (this.swapT > 0) this.rig.position.y = -0.24 - this.swapT * 1.2;
     else this.rig.position.y = -0.24 + Math.sin(performance.now() / 1000 * 2.1) * 0.006;
+  }
+
+  // Feedbacker-style punch: hits up to two projectiles (reflecting them at
+  // the crosshair) and nearby enemies; punching an enemy during its yellow
+  // windup flash parries the attack.
+  _punch(origin, dir) {
+    const G = this.G;
+    this.punchCd = 0.3 + 0.12 * Math.min(this.punchChain, 4);
+    this.punchChain++;
+    this.punchIdleT = 0;
+    this.punchAnimT = 0.22;
+    G.audio.punchWhoosh();
+
+    let parried = false;
+    let hitSomething = false;
+
+    // projectiles first: in front within range, or anywhere point-blank
+    // (covers the mercy window when the orb is already inside you)
+    let reflected = 0;
+    for (const p of G.projectiles) {
+      if (p.dead || p.friendly || reflected >= 2) continue;
+      const to = p.pos.clone().sub(origin);
+      const d = to.length();
+      const facing = d > 0.01 ? to.divideScalar(d).dot(dir) : 1;
+      if (d < 1.4 || (d < PUNCH_RANGE && facing > 0.55)) {
+        p.reflect(dir, 24, REFLECT_DAMAGE);
+        reflected++;
+        parried = true;
+      }
+    }
+
+    // enemies in a short cone
+    let punched = 0;
+    for (const e of G.enemies) {
+      if (e.dead || punched >= 2) continue;
+      const hb = e.hitbox();
+      const closest = new THREE.Vector3(
+        clamp(origin.x, hb.min.x, hb.max.x),
+        clamp(origin.y, hb.min.y, hb.max.y),
+        clamp(origin.z, hb.min.z, hb.max.z),
+      );
+      const to = closest.sub(origin);
+      const d = to.length();
+      const facing = d > 0.01 ? to.divideScalar(d).dot(dir) : 1;
+      if (d > PUNCH_RANGE || facing < 0.6) continue;
+      punched++;
+      hitSomething = true;
+      if (e.parryWindow()) {
+        e.onParried();
+        e.damage(PARRY_DAMAGE, G.player.pos);
+        parried = true;
+      } else {
+        e.damage(PUNCH_DAMAGE, G.player.pos);
+        e.vel.addScaledVector(dir, 4);
+        G.player.heal(10); // blood on the knuckles
+      }
+      G.effects.blood(G.player.eyePos.clone().addScaledVector(dir, Math.min(d, 2)));
+    }
+
+    if (parried) {
+      // full reward: stamina, health, style, hitstop
+      G.player.stamina = 3;
+      G.player.heal(40);
+      G.hud.style.add(150, 'PARRY');
+      G.hud.parryFlash();
+      G.audio.parry();
+      G.effects.flash(origin.clone().addScaledVector(dir, 1), 0xffd23e, 50, 0.12);
+      G.effects.shake(0.08);
+      G.hitstop = 0.09;
+    } else if (hitSomething) {
+      G.audio.punchHit();
+      G.hud.style.add(20, null);
+      G.effects.shake(0.04);
+    }
   }
 
   _fireRevolver(origin, dir) {

@@ -32,6 +32,7 @@ python3 -m http.server 8000
 | Ctrl or C (air) | Ground slam; keep holding to come out sliding |
 | LMB | Fire |
 | RMB (revolver) | Hold to charge a piercing shot (3s cooldown) |
+| F | Punch. Reflects projectiles at your crosshair; parries yellow-flashing attacks |
 | 1 / 2 / Q | Switch weapons |
 | R | Restart after death / victory |
 
@@ -43,6 +44,12 @@ python3 -m http.server 8000
   multi-kills and weapon swapping raise your rank from **D — DRAB** up to
   **U — ULTRACLAUDEKILL**. It decays when you play passively and drops when
   you take hits.
+- **Parry** — enemies flash yellow while winding up an attack; punch them
+  in that window to cancel the attack. Punching an enemy orb reflects it
+  towards your crosshair with boosted damage (orbs stay parryable for a
+  split second even after touching you). A successful parry fully restores
+  stamina, heals, and pays out big style. Spamming punches raises the
+  punch cooldown.
 - **Dashing grants brief invulnerability.** Lava does not care about your
   mercy window.
 - The level: start elevator → burning corridor → three combat chambers →

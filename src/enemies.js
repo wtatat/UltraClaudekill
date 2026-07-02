@@ -116,14 +116,35 @@ class EnemyBase {
     this.mesh.rotation.y = Math.atan2(p.x - this.pos.x, p.z - this.pos.z);
   }
 
+  // true while the enemy is winding up an attack and a punch will parry it
+  parryWindow() { return false; }
+
+  onParried() {}
+
   updateFlash(dt) {
+    const mats = this.mesh.userData.flashables || [];
     if (this.flashT > 0) {
       this.flashT -= dt;
       const on = this.flashT > 0;
-      for (const m of this.mesh.userData.flashables || []) {
+      for (const m of mats) {
         m.emissive.setHex(on ? 0xffffff : 0x000000);
         m.emissiveIntensity = on ? 0.8 : 1;
       }
+      this._parryGlow = false;
+    } else if (this.parryWindow()) {
+      // the tell: bright yellow pulse during the windup
+      const pulse = 0.6 + Math.sin(performance.now() / 40) * 0.3;
+      for (const m of mats) {
+        m.emissive.setHex(0xffcc22);
+        m.emissiveIntensity = pulse;
+      }
+      this._parryGlow = true;
+    } else if (this._parryGlow) {
+      for (const m of mats) {
+        m.emissive.setHex(0x000000);
+        m.emissiveIntensity = 1;
+      }
+      this._parryGlow = false;
     }
   }
 }
@@ -140,6 +161,17 @@ export class Husk extends EnemyBase {
     G.scene.add(this.mesh);
     this.lungeT = 0;
     this.windup = 0;
+    this.staggerT = 0;
+  }
+
+  parryWindow() { return this.windup > 0; }
+
+  onParried() {
+    this.windup = 0;
+    this.lungeT = 0;
+    this.attackCd = 2.2;
+    this.staggerT = 0.7;
+    this.vel.x = 0; this.vel.z = 0;
   }
 
   update(dt) {
@@ -147,6 +179,15 @@ export class Husk extends EnemyBase {
     if (this.dead) return;
     this.animT += dt;
     this.attackCd -= dt;
+    if (this.staggerT > 0) {
+      this.staggerT -= dt;
+      this.vel.x = 0; this.vel.z = 0;
+      this.vel.y -= 30 * dt;
+      moveAndCollide(this.pos, this.vel, this.he, dt, G.colliders);
+      this.mesh.position.copy(this.pos).y = this.pos.y - this.he.y;
+      this.updateFlash(dt);
+      return;
+    }
     const toP = P.pos.clone().sub(this.pos);
     const dist = toP.length();
     toP.y = 0; toP.normalize();
@@ -169,7 +210,7 @@ export class Husk extends EnemyBase {
     } else {
       if (dist < 2.4 && this.attackCd <= 0) {
         this.windup = 0.4;
-        this.G.audio._tone(0.3, { from: 500, to: 900, type: 'sawtooth', gain: 0.1 });
+        this.G.audio.parryPing();
       } else {
         this.vel.x = toP.x * this.speed;
         this.vel.z = toP.z * this.speed;
@@ -262,6 +303,16 @@ export class Warden extends EnemyBase {
     this.slamWindup = 0;
     this.throwCd = 2;
     this.roared = false;
+    this.staggerT = 0;
+  }
+
+  parryWindow() { return this.slamWindup > 0; }
+
+  onParried() {
+    this.slamWindup = 0;
+    this.attackCd = 2.6;
+    this.staggerT = 0.9;
+    this.vel.x = 0; this.vel.z = 0;
   }
 
   damage(amount, fromPos, isSlam) {
@@ -287,6 +338,15 @@ export class Warden extends EnemyBase {
     this.animT += dt;
     this.attackCd -= dt;
     this.throwCd -= dt;
+    if (this.staggerT > 0) {
+      this.staggerT -= dt;
+      this.vel.x = 0; this.vel.z = 0;
+      this.vel.y -= 30 * dt;
+      moveAndCollide(this.pos, this.vel, this.he, dt, G.colliders);
+      this.mesh.position.copy(this.pos).y = this.pos.y - this.he.y;
+      this.updateFlash(dt);
+      return;
+    }
     const toP = P.pos.clone().sub(this.pos);
     const dist = toP.length();
     toP.y = 0; toP.normalize();
@@ -308,6 +368,7 @@ export class Warden extends EnemyBase {
         this.slamWindup = 0.65;
         this.attackCd = 2.2;
         G.audio._tone(0.5, { from: 200, to: 60, type: 'sawtooth', gain: 0.25 });
+        G.audio.parryPing();
       } else if (dist > 10 && this.throwCd <= 0 && hasLos(this.pos.clone().setY(this.pos.y + 1.5), P.eyePos, G.colliders)) {
         this.throwCd = 3.2;
         const from = this.pos.clone().add(new THREE.Vector3(0, 1.5, 0));
@@ -347,6 +408,7 @@ export class Projectile {
     this.friendly = false;
     this.life = 8;
     this.color = color;
+    this.mercyT = 0; // grace window after touching the player, still parryable
     // no per-projectile PointLight: adding/removing lights forces a full
     // shader recompile, which caused big hitches — use an additive halo instead
     const mat = new THREE.MeshBasicMaterial({ color });
@@ -376,23 +438,79 @@ export class Projectile {
     this.G.scene.remove(this.mesh);
   }
 
+  // Punched by the Feedbacker: reflect towards the aim point, boost it,
+  // and make it hurt enemies instead of the player.
+  reflect(dir, speed, damage) {
+    this.friendly = true;
+    this.damage = damage;
+    this.mercyT = 0;
+    this.life = 5;
+    this.vel.copy(dir).multiplyScalar(Math.max(speed, this.vel.length() * 1.8));
+    this.color = 0xffd23e;
+    this.mesh.material.color.setHex(0xffd23e);
+    this.mesh.children[0].material.color.setHex(0xffd23e);
+  }
+
   update(dt) {
     if (this.dead) return;
     this.life -= dt;
     if (this.life <= 0) return this.explode();
+
+    // mercy frames: the orb has touched the player but the hit lands with a
+    // small delay, leaving a last-chance parry window (like the original)
+    if (this.mercyT > 0) {
+      this.mercyT -= dt;
+      if (this.mercyT <= 0) {
+        this.G.player.damage(this.damage, this.pos);
+        return this.explode();
+      }
+      return; // frozen in the player during the window
+    }
+
+    // substep so fast (reflected) orbs can't fly through a target in one frame
+    const steps = Math.min(8, Math.max(1, Math.ceil(this.vel.length() * dt / 0.3)));
+    for (let i = 0; i < steps; i++) {
+      this._step(dt / steps);
+      if (this.dead || this.mercyT > 0) break;
+    }
+    if (!this.dead) {
+      this.mesh.position.copy(this.pos);
+      this.mesh.rotation.x += dt * 6;
+      this.mesh.rotation.y += dt * 8;
+    }
+  }
+
+  _step(dt) {
     this.pos.addScaledVector(this.vel, dt);
-    this.mesh.position.copy(this.pos);
-    this.mesh.rotation.x += dt * 6;
-    this.mesh.rotation.y += dt * 8;
-    // hit player
-    const P = this.G.player;
-    const pd = this.pos.clone().sub(P.pos);
-    pd.x = Math.max(0, Math.abs(pd.x) - P.he.x);
-    pd.y = Math.max(0, Math.abs(pd.y) - P.he.y);
-    pd.z = Math.max(0, Math.abs(pd.z) - P.he.z);
-    if (pd.length() < this.radius + 0.1) {
-      P.damage(this.damage, this.pos);
-      return this.explode();
+
+    if (this.friendly) {
+      // hit enemies: full damage to the direct target, splash to neighbours
+      for (const e of this.G.enemies) {
+        if (e.dead) continue;
+        const hb = e.hitbox();
+        if (this.pos.x > hb.min.x - this.radius && this.pos.x < hb.max.x + this.radius &&
+            this.pos.y > hb.min.y - this.radius && this.pos.y < hb.max.y + this.radius &&
+            this.pos.z > hb.min.z - this.radius && this.pos.z < hb.max.z + this.radius) {
+          e.damage(this.damage, this.pos);
+          this.G.effects.blood(this.pos);
+          this.G.audio.hitmarker();
+          for (const o of this.G.enemies) {
+            if (o !== e && !o.dead && o.pos.distanceTo(this.pos) < 2.5) o.damage(this.damage * 0.5, this.pos);
+          }
+          return this.explode();
+        }
+      }
+    } else {
+      // touch the player -> start mercy window instead of instant damage
+      const P = this.G.player;
+      const pd = this.pos.clone().sub(P.pos);
+      pd.x = Math.max(0, Math.abs(pd.x) - P.he.x);
+      pd.y = Math.max(0, Math.abs(pd.y) - P.he.y);
+      pd.z = Math.max(0, Math.abs(pd.z) - P.he.z);
+      if (pd.length() < this.radius + 0.1) {
+        this.mercyT = 0.15;
+        return;
+      }
     }
     // hit level
     for (const c of this.G.colliders) {

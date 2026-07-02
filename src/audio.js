@@ -129,6 +129,19 @@ export class AudioSys {
   }
   projShoot() { this._tone(0.15, { from: 800, to: 300, type: 'sawtooth', gain: 0.18 }); }
   parryBreak() { this._noise(0.12, { freq: 3000, gain: 0.3, type: 'bandpass', q: 1.5 }); }
+  punchWhoosh() { this._noise(0.12, { freq: 1200, gain: 0.22, type: 'bandpass', q: 0.8, attack: 0.01 }); }
+  punchHit() {
+    this._noise(0.1, { freq: 450, gain: 0.5 });
+    this._tone(0.09, { from: 220, to: 90, type: 'square', gain: 0.2 });
+  }
+  parry() {
+    // bright triumphant ding
+    this._tone(0.25, { from: 1320, type: 'triangle', gain: 0.35 });
+    this._tone(0.3, { from: 1980, type: 'sine', gain: 0.22 });
+    this._noise(0.15, { freq: 5000, gain: 0.25, type: 'highpass' });
+    setTimeout(() => this._tone(0.22, { from: 1760, to: 2200, type: 'triangle', gain: 0.25 }), 70);
+  }
+  parryPing() { this._tone(0.12, { from: 1500, to: 1900, type: 'sine', gain: 0.2 }); }
   checkpoint() { this._tone(0.3, { from: 440, to: 880, type: 'triangle', gain: 0.25 }); }
 
   // ---- ambience: low rumbling drone ----
