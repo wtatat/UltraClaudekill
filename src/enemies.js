@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { moveAndCollide, hasLos, randRange } from './utils.js';
+import { moveAndCollide, hasLos, randRange, clamp } from './utils.js';
 
 // Three original enemy archetypes:
 //  Husk   — fast melee rusher
@@ -35,6 +35,57 @@ function humanoid({ scale = 1, skin = 0xb04a3a, cloth = 0x2a2222, eyes = 0xff220
 }
 
 let nextId = 1;
+
+// Soft body-vs-body colliders: enemies push each other (and get pushed out
+// of the player) apart horizontally. Heavier bodies shove lighter ones.
+// The push is positional and capped per frame, so it separates crowds
+// without ever blocking anyone's approach to the player.
+export function separateEnemies(G, dt) {
+  const list = [];
+  for (const e of G.enemies) if (!e.dead) list.push(e);
+  const maxPush = 5 * dt;
+
+  for (let i = 0; i < list.length; i++) {
+    const a = list[i];
+    for (let j = i + 1; j < list.length; j++) {
+      const b = list[j];
+      const dy = Math.abs(a.pos.y - b.pos.y);
+      if (dy > a.he.y + b.he.y) continue;
+      let dx = b.pos.x - a.pos.x;
+      let dz = b.pos.z - a.pos.z;
+      const px = (a.he.x + b.he.x) - Math.abs(dx);
+      const pz = (a.he.z + b.he.z) - Math.abs(dz);
+      if (px <= 0 || pz <= 0) continue;
+      // stacked dead-center: pick an arbitrary split direction
+      if (dx === 0 && dz === 0) { dx = a.avoidBias * 0.01; dz = 0.01; }
+      const wa = b.mass / (a.mass + b.mass);
+      const wb = 1 - wa;
+      if (px < pz) {
+        const s = Math.sign(dx || 1) * Math.min(px, maxPush);
+        a.pos.x -= s * wa;
+        b.pos.x += s * wb;
+      } else {
+        const s = Math.sign(dz || 1) * Math.min(pz, maxPush);
+        a.pos.z -= s * wa;
+        b.pos.z += s * wb;
+      }
+    }
+
+    // don't stand inside the player (the player is never pushed)
+    const P = G.player;
+    if (Math.abs(a.pos.y - P.pos.y) < a.he.y + P.he.y) {
+      const dx = a.pos.x - P.pos.x;
+      const dz = a.pos.z - P.pos.z;
+      const px = (a.he.x + P.he.x) - Math.abs(dx);
+      const pz = (a.he.z + P.he.z) - Math.abs(dz);
+      if (px > 0 && pz > 0) {
+        if (px < pz) a.pos.x += Math.sign(dx || a.avoidBias) * Math.min(px, maxPush);
+        else a.pos.z += Math.sign(dz || a.avoidBias) * Math.min(pz, maxPush);
+      }
+    }
+    a.mesh.position.copy(a.pos).y = a.pos.y - a.he.y;
+  }
+}
 
 // Add one hidden instance of every enemy/projectile material to the scene,
 // so their shader programs compile during the loading screen instead of
@@ -76,6 +127,35 @@ class EnemyBase {
     this.mesh = null;
     this.styleValue = 100;
     this.name = 'HUSK';
+    this.avoidBias = Math.random() < 0.5 ? 1 : -1; // preferred side to go around
+  }
+
+  get mass() { return this.he.x * this.he.x * this.he.y; }
+
+  // Local avoidance: bend the desired direction sideways around packmates
+  // blocking the path. Disabled at close range so bodies never get in the
+  // way of an attack.
+  steer(desired, playerDist) {
+    if (playerDist < 3.2) return desired;
+    const side = new THREE.Vector3(-desired.z, 0, desired.x);
+    let lateral = 0;
+    for (const o of this.G.enemies) {
+      if (o === this || o.dead) continue;
+      const dx = o.pos.x - this.pos.x;
+      const dz = o.pos.z - this.pos.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist < 1e-4 || dist > 4.5) continue;
+      if (Math.abs(o.pos.y - this.pos.y) > this.he.y + o.he.y) continue;
+      const ahead = (dx * desired.x + dz * desired.z) / dist;
+      if (ahead < 0.35) continue; // not in front of us
+      const latOff = dx * side.x + dz * side.z;
+      const pathWidth = (this.he.x + o.he.x) * 2.2;
+      if (Math.abs(latOff) > pathWidth) continue; // not actually blocking
+      const weight = (1 - dist / 4.5) * ahead * (o.mass >= this.mass ? 1.4 : 0.8);
+      lateral -= (latOff !== 0 ? Math.sign(latOff) : this.avoidBias) * weight;
+    }
+    if (lateral === 0) return desired;
+    return desired.clone().addScaledVector(side, clamp(lateral, -1.3, 1.3)).normalize();
   }
 
   hitbox() {
@@ -212,8 +292,9 @@ export class Husk extends EnemyBase {
         this.windup = 0.4;
         this.G.audio.parryPing();
       } else {
-        this.vel.x = toP.x * this.speed;
-        this.vel.z = toP.z * this.speed;
+        const move = this.steer(toP, dist);
+        this.vel.x = move.x * this.speed;
+        this.vel.z = move.z * this.speed;
       }
     }
 
@@ -266,6 +347,7 @@ export class Shade extends EnemyBase {
     if (!los || dist > 26) move.copy(toP);            // approach
     else if (dist < 8) move.copy(toP).negate();       // back off
     move.addScaledVector(side, 0.8).normalize();
+    move = this.steer(move, dist);
     this.vel.x = move.x * 4.2;
     this.vel.z = move.z * 4.2;
     this.vel.y -= 30 * dt;
@@ -376,8 +458,9 @@ export class Warden extends EnemyBase {
         G.spawnProjectile(from, aim.multiplyScalar(18), { damage: 22, color: 0xff6a00, radius: 0.4, hp: 3 });
         G.audio.projShoot();
       } else {
-        this.vel.x = toP.x * 4;
-        this.vel.z = toP.z * 4;
+        const move = this.steer(toP, dist);
+        this.vel.x = move.x * 4;
+        this.vel.z = move.z * 4;
       }
     }
 

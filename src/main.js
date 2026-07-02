@@ -6,7 +6,7 @@ import { Player } from './player.js';
 import { Weapons } from './weapons.js';
 import { Level } from './level.js';
 import { Hud, RANKS } from './hud.js';
-import { Projectile, prewarmEnemyMeshes } from './enemies.js';
+import { Projectile, prewarmEnemyMeshes, separateEnemies } from './enemies.js';
 import { lerp } from './utils.js';
 
 const canvas = document.getElementById('game');
@@ -154,6 +154,7 @@ function frame(now) {
     G.player.update(dt, G.input);
     G.weapons.update(dt, G.input);
     for (const e of G.enemies) e.update(dt);
+    separateEnemies(G, dt);
     for (let i = G.projectiles.length - 1; i >= 0; i--) {
       const p = G.projectiles[i];
       p.update(dt);
