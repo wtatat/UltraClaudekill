@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { raycastLevel, rayAabb, clamp } from './utils.js';
+import { raycastLevelHit, rayAabb, clamp } from './utils.js';
 
 const PUNCH_RANGE = 3.4;
 const PUNCH_DAMAGE = 12;
@@ -88,7 +88,10 @@ export class Weapons {
     this.rig.add(this.revolver, this.shotgun);
     this.shotgun.visible = false;
 
-    this.current = 'revolver';
+    // you start empty-handed: the revolver waits on a pedestal in the dark
+    this.current = 'none';
+    this.revolver.visible = false;
+    this.hasRevolver = false;
     this.hasShotgun = false;
     this.cooldown = 0;
     this.chargeCd = 0;
@@ -110,12 +113,18 @@ export class Weapons {
     this.punchIdleT = 0;
   }
 
+  giveRevolver() {
+    this.hasRevolver = true;
+    this.switchTo('revolver');
+  }
+
   giveShotgun() {
     this.hasShotgun = true;
     this.switchTo('shotgun');
   }
 
   switchTo(name) {
+    if (name === 'revolver' && !this.hasRevolver) return;
     if (name === 'shotgun' && !this.hasShotgun) return;
     if (name === this.current) return;
     this.current = name;
@@ -132,9 +141,11 @@ export class Weapons {
   }
 
   // Fire a hitscan ray; returns list of enemy hits (sorted), respecting walls.
+  // Breakable glass and planks shatter when the ray lands on them.
   _hitscan(origin, dir, pierce = false) {
     const G = this.G;
-    const wallDist = raycastLevel(origin, dir, G.colliders, 300);
+    const { dist: wallDist, collider: wallHit } = raycastLevelHit(origin, dir, G.colliders, 300);
+    if (wallHit) G.level.breakHit(wallHit);
     const hits = [];
     for (const e of G.enemies) {
       if (e.dead) continue;
@@ -193,8 +204,9 @@ export class Weapons {
     const origin = G.player.eyePos;
     const dir = G.player.aimDir();
 
-    // --- punch (F) ---
-    if (input.justPressed('KeyF') && this.punchCd <= 0) this._punch(origin, dir);
+    // --- punch (F; also LMB while you have no gun) ---
+    const wantPunch = input.justPressed('KeyF') || (this.current === 'none' && input.clicked0);
+    if (wantPunch && this.punchCd <= 0) this._punch(origin, dir);
     if (this.punchAnimT > 0) {
       this.punchAnimT -= dt;
       const k = Math.max(0, this.punchAnimT / 0.22);
@@ -226,7 +238,7 @@ export class Weapons {
     }
 
     // --- primary fire ---
-    if (input.mouse0 && this.cooldown <= 0 && this.swapT <= 0 && !this.charging) {
+    if (input.mouse0 && this.cooldown <= 0 && this.swapT <= 0 && !this.charging && this.current !== 'none') {
       if (this.current === 'revolver') this._fireRevolver(origin, dir);
       else this._fireShotgun(origin, dir);
     }
@@ -252,6 +264,9 @@ export class Weapons {
 
     let parried = false;
     let hitSomething = false;
+
+    // breakables: planks and glass shatter under a fist
+    if (G.level && G.level.punchBreakables(origin, dir, PUNCH_RANGE)) hitSomething = true;
 
     // projectiles first: in front within range, or anywhere point-blank
     // (covers the mercy window when the orb is already inside you)

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { aabb } from './utils.js';
-import { Husk, Shade, Warden } from './enemies.js';
+import { Filth, Stray, MaliciousFace } from './enemies.js';
 
 // ---------- procedural textures (canvas, pixel-art style) ----------
 function makeTexture(draw, size = 64) {
@@ -77,16 +77,36 @@ function lavaTex() {
   });
 }
 
+function woodTex() {
+  return makeTexture((ctx, s) => {
+    noiseRect(ctx, 0, 0, s, s, '#6b4a26', 0.22, 160);
+    ctx.strokeStyle = '#43301a';
+    for (let i = 0; i < 6; i++) {
+      ctx.lineWidth = 1 + Math.random() * 2;
+      ctx.beginPath();
+      ctx.moveTo(0, i * 11 + Math.random() * 4);
+      ctx.lineTo(s, i * 11 + Math.random() * 6);
+      ctx.stroke();
+    }
+  });
+}
+
 // ---------- level builder ----------
 export class Level {
   constructor(G) {
     this.G = G;
-    this.doors = [];       // { mesh, collider, open, h }
-    this.triggers = [];    // { box, once, fired, fn, name }
-    this.pickups = [];     // { mesh, r, fn, taken, spin }
-    this.rooms = {};       // name -> { enemies:Set, door }
+    this.doors = [];
+    this.triggers = [];
+    this.pickups = [];
+    this.rooms = {};
+    this.breakables = [];
+    this.breakableByCollider = new Map();
+    this.hazards = [];        // { min, max, dps zones that hurt player AND enemies }
+    this.spinners = [];       // rotating hazard props
+    this.hazardKills = 0;
+    this.challengeDone = false;
     this.secretsFound = 0;
-    this.secretsTotal = 1;
+    this.secretsTotal = 5;
     this._buildMaterials();
     this._build();
   }
@@ -96,14 +116,17 @@ export class Level {
     const floor = floorTex(); floor.repeat.set(2, 2);
     const panel = panelTex(); panel.repeat.set(2, 2);
     const lava = lavaTex(); lava.repeat.set(3, 3);
+    const wood = woodTex();
     this.mats = {
       brick: new THREE.MeshStandardMaterial({ map: brick, roughness: 1 }),
       floor: new THREE.MeshStandardMaterial({ map: floor, roughness: 1 }),
       panel: new THREE.MeshStandardMaterial({ map: panel, roughness: 0.8, metalness: 0.2 }),
       dark: new THREE.MeshStandardMaterial({ color: 0x17141a, roughness: 1 }),
       lava: new THREE.MeshStandardMaterial({ map: lava, emissive: 0xff4400, emissiveIntensity: 0.9, emissiveMap: lava }),
+      wood: new THREE.MeshStandardMaterial({ map: wood, roughness: 0.95 }),
       door: new THREE.MeshStandardMaterial({ color: 0x5a1c1c, roughness: 0.6, metalness: 0.4 }),
       trim: new THREE.MeshStandardMaterial({ color: 0x777d88, roughness: 0.5, metalness: 0.6 }),
+      glass: new THREE.MeshStandardMaterial({ color: 0xa8d8e8, transparent: true, opacity: 0.28, roughness: 0.1, metalness: 0.1 }),
       glowRed: new THREE.MeshStandardMaterial({ color: 0xff3020, emissive: 0xff3020, emissiveIntensity: 2.2 }),
       glowOrange: new THREE.MeshStandardMaterial({ color: 0xff8820, emissive: 0xff8820, emissiveIntensity: 2 }),
       glowBlue: new THREE.MeshStandardMaterial({ color: 0x39c2ff, emissive: 0x39c2ff, emissiveIntensity: 2 }),
@@ -128,7 +151,6 @@ export class Level {
     return mesh;
   }
 
-  // room: floor + ceiling + 4 walls with optional openings (done by caller placing walls)
   floorCeil(cx, cz, w, d, floorY, height, { ceil = true } = {}) {
     this.box(cx, floorY - 0.5, cz, w, 1, d, 'floor');
     if (ceil) this.box(cx, floorY + height + 0.5, cz, w, 1, d, 'dark');
@@ -141,31 +163,123 @@ export class Level {
     return l;
   }
 
-  // Torches are emissive-only: real lights are a scarce resource (every
-  // point light is evaluated in every shader), so rooms get one or two
-  // area lights instead and torches just glow.
   torch(x, y, z, color = 0xff8820) {
     this.box(x, y, z, 0.18, 0.5, 0.18, color === 0xff8820 ? 'glowOrange' : 'glowBlue', { collide: false });
   }
 
-  door(cx, cy, cz, w, h, d, name) {
-    const mesh = this.box(cx, cy, cz, w, h, d, 'door', { collide: false });
-    // glowing seam
-    const seam = new THREE.Mesh(new THREE.BoxGeometry(w * 0.9, 0.1, d + 0.06), this.mats.glowRed);
-    seam.position.set(cx, cy, cz);
-    this.G.scene.add(seam);
+  // ---- breakables (planks, glass) ----
+  breakable(cx, cy, cz, w, h, d, { glass = false } = {}) {
+    const meshes = [];
+    if (glass) {
+      meshes.push(this.box(cx, cy, cz, w, h, d, 'glass', { collide: false }));
+      // frame edge glow so panes read at a glance
+      const edge = new THREE.Mesh(new THREE.BoxGeometry(w + 0.04, Math.min(h, 0.06), d + 0.04), this.mats.glowBlue);
+      edge.position.set(cx, cy + h / 2, cz);
+      this.G.scene.add(edge);
+      meshes.push(edge);
+    } else {
+      // a stack of planks across the opening
+      const horizontal = w > d;
+      const count = Math.max(3, Math.round(h / 0.5));
+      for (let i = 0; i < count; i++) {
+        const py = cy - h / 2 + (i + 0.5) * (h / count);
+        const p = this.box(
+          cx + (Math.random() - 0.5) * 0.06, py, cz + (Math.random() - 0.5) * 0.06,
+          horizontal ? w : d * 0.9, h / count * 0.75, horizontal ? d * 0.9 : w,
+          'wood', { collide: false });
+        p.rotation.z = (Math.random() - 0.5) * 0.08;
+        meshes.push(p);
+      }
+    }
     const collider = aabb(cx, cy, cz, w, h, d);
     this.G.colliders.push(collider);
-    const door = { mesh, seam, collider, open: false, h, t: 0, name, baseY: cy };
+    const b = { meshes, colliders: [collider], glass, broken: false };
+    this.breakables.push(b);
+    this.breakableByCollider.set(collider, b);
+    return b;
+  }
+
+  breakIt(b) {
+    if (b.broken) return;
+    b.broken = true;
+    for (const c of b.colliders) {
+      const i = this.G.colliders.indexOf(c);
+      if (i >= 0) this.G.colliders.splice(i, 1);
+      this.breakableByCollider.delete(c);
+      const center = new THREE.Vector3().addVectors(c.min, c.max).multiplyScalar(0.5);
+      this.G.effects.spawn(center, {
+        count: 16, mat: b.glass ? 'glass' : 'gibWood', speed: 5,
+        size: b.glass ? 0.09 : 0.16, life: 0.8, up: 3,
+      });
+    }
+    for (const m of b.meshes) this.G.scene.remove(m);
+    if (b.glass) this.G.audio.glassBreak();
+    else this.G.audio.plankBreak();
+    if (b.onBreak) b.onBreak();
+  }
+
+  breakHit(collider) {
+    const b = this.breakableByCollider.get(collider);
+    if (b) this.breakIt(b);
+  }
+
+  punchBreakables(origin, dir, range) {
+    let hit = false;
+    for (const b of this.breakables) {
+      if (b.broken) continue;
+      for (const c of b.colliders) {
+        const closest = new THREE.Vector3(
+          Math.min(Math.max(origin.x, c.min.x), c.max.x),
+          Math.min(Math.max(origin.y, c.min.y), c.max.y),
+          Math.min(Math.max(origin.z, c.min.z), c.max.z),
+        );
+        const to = closest.sub(origin);
+        const d = to.length();
+        if (d > range) continue;
+        if (d > 0.01 && to.divideScalar(d).dot(dir) < 0.35) continue;
+        this.breakIt(b);
+        hit = true;
+        break;
+      }
+    }
+    return hit;
+  }
+
+  breakGlassUnder(player) {
+    const feet = player.pos.y - player.he.y;
+    for (const b of this.breakables) {
+      if (b.broken || !b.glass) continue;
+      for (const c of b.colliders) {
+        if (Math.abs(c.max.y - feet) > 0.2) continue;
+        if (player.pos.x + player.he.x < c.min.x || player.pos.x - player.he.x > c.max.x) continue;
+        if (player.pos.z + player.he.z < c.min.z || player.pos.z - player.he.z > c.max.z) continue;
+        this.breakIt(b);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // ---- doors ----
+  door(cx, cy, cz, w, h, d, name, { gap = 0 } = {}) {
+    // gap > 0 leaves a slide-through slot underneath (jammed door)
+    const bodyH = h - gap;
+    const bodyY = cy + gap / 2;
+    const mesh = this.box(cx, bodyY, cz, w, bodyH, d, 'door', { collide: false });
+    const seam = new THREE.Mesh(new THREE.BoxGeometry(w * 0.9, 0.1, d + 0.06), gap > 0 ? this.mats.trim : this.mats.glowRed);
+    seam.position.set(cx, bodyY, cz);
+    this.G.scene.add(seam);
+    const collider = aabb(cx, bodyY, cz, w, bodyH, d);
+    this.G.colliders.push(collider);
+    const door = { mesh, seam, collider, open: false, h: bodyH, t: 0, name, baseY: bodyY, jammed: gap > 0 };
     this.doors.push(door);
     return door;
   }
 
   openDoor(door) {
-    if (door.open) return;
+    if (door.open || door.jammed) return;
     door.open = true;
     this.G.audio.door();
-    // remove collider
     const i = this.G.colliders.indexOf(door.collider);
     if (i >= 0) this.G.colliders.splice(i, 1);
     door.seam.material = this.mats.glowBlue;
@@ -175,9 +289,26 @@ export class Level {
     this.triggers.push({ box: aabb(cx, cy, cz, w, h, d), fired: false, fn, name });
   }
 
+  checkpoint(x, y, z) {
+    const pylon = this.box(x, y + 0.5, z, 0.25, 1, 0.25, 'glowBlue', { collide: false });
+    this.trigger(x, y + 1, z, 3.5, 3, 3.5, () => {
+      this.G.checkpoint = { x, y: y + 1.2, z };
+      this.G.audio.checkpoint();
+      this.G.hud.message('CHECKPOINT');
+      pylon.material = this.mats.glowOrange;
+    });
+  }
+
   pickup(x, y, z, kind) {
     let mesh, fn;
-    if (kind === 'shotgun') {
+    if (kind === 'revolver') {
+      mesh = new THREE.Group();
+      const b = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.12, 0.6), this.mats.trim);
+      const grip = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.22, 0.1), this.mats.door);
+      grip.position.set(0, -0.12, 0.22);
+      mesh.add(b, grip);
+      fn = () => this._onRevolverPickup();
+    } else if (kind === 'shotgun') {
       mesh = new THREE.Group();
       const b = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 1.0), this.mats.trim);
       const p = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.14, 0.3), this.mats.door);
@@ -195,16 +326,16 @@ export class Level {
       mesh = new THREE.Mesh(new THREE.IcosahedronGeometry(0.35, 0), this.mats.glowBlue);
       fn = () => {
         this.secretsFound++;
-        this.G.player.maxHp += 25;
+        this.G.player.maxHp += 10;
         this.G.player.heal(100);
         this.G.audio.secret();
-        this.G.hud.message('SECRET FOUND — MAX HP +25');
+        this.G.hud.message(`SECRET ${this.secretsFound} / ${this.secretsTotal} — MAX HP +10`);
         this.G.hud.style.add(150, 'SECRET');
       };
     }
     mesh.position.set(x, y, z);
     this.G.scene.add(mesh);
-    this.pickups.push({ mesh, r: 1.2, fn, taken: false, baseY: y });
+    this.pickups.push({ mesh, r: kind === 'revolver' ? 1.9 : 1.2, fn, taken: false, baseY: y });
   }
 
   spawnRoom(name, list) {
@@ -236,6 +367,8 @@ export class Level {
     this.mats.glowOrange.emissiveIntensity = 2 + Math.sin(t * 9) * 0.25 + Math.sin(t * 23) * 0.2;
     const lavaGlow = 0.9 + Math.sin(t * 5) * 0.12;
     for (const m of this._lavaMats || []) m.emissiveIntensity = lavaGlow;
+    // rotating hazard props
+    for (const s of this.spinners) s.mesh.rotation[s.axis] += s.speed * dt;
     // doors animate up
     for (const d of this.doors) {
       if (d.open && d.t < 1) {
@@ -274,255 +407,387 @@ export class Level {
     this.G.audio.combat += ((near > 0 ? Math.min(1, 0.5 + near * 0.12) : 0) - this.G.audio.combat) * dt * 2;
   }
 
+  // hazard zones hurt the player and shred enemies (grinders, turbine, fire)
+  checkHazards(dt) {
+    const P = this.G.player;
+    this._hazT = (this._hazT || 0) + dt;
+    if (this._hazT < 0.25) return;
+    this._hazT = 0;
+    for (const z of this.hazards) {
+      if (!P.dead &&
+          P.pos.x > z.min.x && P.pos.x < z.max.x &&
+          P.pos.y - P.he.y < z.max.y && P.pos.y > z.min.y &&
+          P.pos.z > z.min.z && P.pos.z < z.max.z) {
+        P.hurtCooldown = 0;
+        P.damage(z.dmg || 10);
+      }
+      for (const e of this.G.enemies) {
+        if (e.dead) continue;
+        if (e.pos.x > z.min.x && e.pos.x < z.max.x &&
+            e.pos.y - e.he.y < z.max.y && e.pos.y - e.he.y > z.min.y - 1 &&
+            e.pos.z > z.min.z && e.pos.z < z.max.z) {
+          e.damage(45, null, true);
+          if (e.dead) {
+            this.hazardKills++;
+            this.G.hud.style.add(50, 'SHREDDED');
+            if (this.hazardKills >= 5 && !this.challengeDone) {
+              this.challengeDone = true;
+              this.G.hud.message('CHALLENGE COMPLETE — 5 SHREDDED');
+              this.G.hud.style.add(300, 'CHALLENGE');
+            }
+          }
+        }
+      }
+    }
+  }
+
+  _onRevolverPickup() {
+    const G = this.G;
+    G.weapons.giveRevolver();
+    G.audio.pickup();
+    G.hud.message('PIERCER REVOLVER ACQUIRED');
+    // the lights snap on...
+    for (const l of this.revolverLights) l.intensity = 26;
+    this.revolverGlow.forEach(m => { m.visible = true; });
+    G.audio.door();
+    // ...and the dead come out
+    setTimeout(() => {
+      if (G.state !== 'playing') return;
+      G.hud.message('THEY HEARD THAT');
+      G.hud.setObjective('EXTERMINATE');
+      G.audio.wardenRoar();
+      this.spawnRoom('rev', [
+        [Filth, -6, 1, -62], [Filth, 6, 1, -62], [Filth, 0, 1, -72],
+      ]);
+      this.rooms.rev.next = () => {
+        G.hud.message('MORE OF THEM');
+        this.spawnRoom('rev', [
+          [Filth, -7, 1, -70], [Filth, 7, 1, -70], [Filth, -3, 1, -58], [Filth, 3, 1, -74],
+        ]);
+      };
+    }, 900);
+  }
+
   // ================= LAYOUT =================
-  // An original homage to the classic "first level in Hell" opener:
-  // elevator -> burning corridor -> three combat chambers -> exit elevator.
+  // Faithful homage to the classic 0-1 room sequence:
+  // drop shaft -> KEEP OUT planks -> jammed doors (slide) -> collapsed
+  // walkway (dash) -> dark Revolver Room -> three Glass Rooms with a
+  // checkpoint -> Grinder Walkway -> Turbine Chamber -> boss + elevator.
   _build() {
     const G = this.G;
 
-    // ---- 0. start elevator (player spawns inside, z ~ 0) ----
-    this.floorCeil(0, 0, 6, 8, 0, 4);
-    this.box(-3.5, 2, 0, 1, 4, 8, 'panel');   // left wall
-    this.box(3.5, 2, 0, 1, 4, 8, 'panel');    // right wall
-    this.box(0, 2, 4.5, 6, 4, 1, 'panel');    // back wall
-    this.box(0, 3.9, -3.5, 6, 0.6, 1, 'panel'); // lintel
-    this.light(0, 3.2, 0, 0xffffff, 14, 10);
-    const startDoor = this.door(0, 1.8, -3.5, 5, 3.6, 0.6, 'start');
-    setTimeout(() => { this.openDoor(startDoor); }, 1200);
-
-    // ---- 1. corridor A: z -4 .. -28, width 6, flame vents ----
-    this.floorCeil(0, -16, 6, 24, 0, 5);
-    this.box(-3.5, 2.5, -16, 1, 5, 24, 'brick');
-    this.box(3.5, 2.5, -16, 1, 5, 24, 'brick');
-    for (let z = -8; z >= -24; z -= 5) {
-      this.torch(-2.8, 1.4, z);
-      this.torch(2.8, 1.4, z + 2.5);
-    }
-    // lava gutter along the corridor center-line edges (decorative)
-    this.box(0, 0.06, -16, 0.8, 0.1, 22, 'lava', { collide: false });
-    this.light(0, 1, -16, 0xff5510, 10, 20);
-
-    this.trigger(0, 2, -8, 6, 4, 3, () => {
-      G.hud.message('0-1  //  INTO THE FIRE');
-      G.hud.setObjective('FIND THE EXIT');
+    // ---- S. drop shaft + landing room (z 4 .. -8) ----
+    this.floorCeil(0, -2, 8, 12, 0, 5, { ceil: false });
+    // ceiling with a hole (x -2..2, z -1..4) the player drops through
+    this.box(0, 5.5, -4.5, 8, 1, 7, 'dark');
+    this.box(-3, 5.5, 1.5, 2, 1, 5, 'dark');
+    this.box(3, 5.5, 1.5, 2, 1, 5, 'dark');
+    // the shaft tube above the hole
+    this.box(-2.5, 8.5, 1.5, 1, 7, 5, 'brick');
+    this.box(2.5, 8.5, 1.5, 1, 7, 5, 'brick');
+    this.box(0, 8.5, 4, 5, 7, 1, 'brick');
+    this.box(0, 8.5, -1, 5, 7, 1, 'brick');
+    this.box(-4.5, 2.5, -2, 1, 5, 12, 'brick');
+    this.box(4.5, 2.5, -2, 1, 5, 12, 'brick');
+    this.box(0, 2.5, 4.5, 8, 5, 1, 'brick');
+    this.light(0, 3.5, -2, 0xffb37a, 14, 12);
+    this.trigger(0, 2, -2, 8, 4, 6, () => {
+      G.hud.message('0-1  //  INTO THE FIRE', 3000);
+      G.hud.setObjective('FIND A WAY DOWN');
     });
 
-    // ---- 2. chamber ONE (z -28 .. -46, 18x18): 3 husks ----
-    const c1z = -37;
-    this.floorCeil(0, c1z, 18, 18, 0, 6);
-    this.box(-9.5, 3, c1z, 1, 6, 18, 'brick');
-    this.box(9.5, 3, c1z, 1, 6, 18, 'brick');
-    // front wall with entrance gap
-    this.box(-6, 3, -28, 7, 6, 1, 'brick');
-    this.box(6, 3, -28, 7, 6, 1, 'brick');
-    this.box(0, 5, -28, 6, 2.5, 1, 'brick');
-    // back wall with exit gap
-    this.box(-6, 3, -46, 7, 6, 1, 'brick');
-    this.box(6, 3, -46, 7, 6, 1, 'brick');
-    this.box(0, 5, -46, 6, 2.5, 1, 'brick');
-    // crates
-    this.box(-5, 0.75, c1z - 3, 1.5, 1.5, 1.5, 'panel');
-    this.box(-5, 2.25, c1z - 3, 1.5, 1.5, 1.5, 'panel');
-    this.box(5.5, 0.75, c1z + 4, 1.5, 1.5, 1.5, 'panel');
-    this.torch(-8.8, 1.6, c1z - 6); this.torch(8.8, 1.6, c1z - 6);
-    this.torch(-8.8, 1.6, c1z + 6); this.torch(8.8, 1.6, c1z + 6);
-    this.light(0, 5, c1z, 0xff7744, 20, 24);
+    // ---- T1. KEEP OUT room (z -8 .. -20) ----
+    this.floorCeil(0, -14, 8, 12, 0, 5);
+    this.box(-4.5, 2.5, -14, 1, 5, 12, 'brick');
+    this.box(4.5, 2.5, -14, 1, 5, 12, 'brick');
+    this.box(0, 4.4, -8, 8, 1.2, 1, 'brick'); // lintel into T1
+    this.torch(-3.8, 1.6, -10); this.torch(3.8, 1.6, -12);
+    // doorway at z=-20 blocked by planks
+    this.box(-3, 2.5, -20, 4, 5, 1, 'brick');
+    this.box(3, 2.5, -20, 4, 5, 1, 'brick');
+    this.box(0, 4.25, -20, 2.4, 1.5, 1, 'brick');
+    this.breakable(0, 1.75, -20, 2.4, 3.5, 0.4);
+    this.trigger(0, 2, -14, 8, 4, 5, () => {
+      G.hud.message('KEEP OUT');
+      G.hud.setObjective('PUNCH (F / LMB) THROUGH THE PLANKS');
+    });
+    // secret 1: shelf by the left wall, wall-jump up to it
+    this.box(-3, 3.6, -9.4, 2, 0.4, 2.4, 'panel');
+    this.pickup(-3, 4.4, -9.4, 'secret');
 
-    const door1 = this.door(0, 1.9, -46, 5.5, 3.8, 0.8, 'c1');
-    this.rooms.c1 = { alive: new Set(), door: door1 };
-    this.trigger(0, 2, -31, 12, 5, 3, () => {
-      this.spawnRoom('c1', [
-        [Husk, -4, 1, c1z - 2],
-        [Husk, 4, 1, c1z - 4],
-        [Husk, 0, 1, c1z - 6],
-      ]);
-      G.hud.message('THEY COME CRAWLING');
-      G.hud.setObjective('EXTERMINATE');
-      G.audio.wardenRoar();
+    // ---- T2. jammed doors corridor (z -20 .. -38) ----
+    this.floorCeil(0, -29, 6, 18, 0, 4.5);
+    this.box(-3.5, 2.25, -29, 1, 4.5, 18, 'brick');
+    this.box(3.5, 2.25, -29, 1, 4.5, 18, 'brick');
+    this.torch(-2.8, 1.4, -24); this.torch(2.8, 1.4, -33);
+    this.door(0, 2.25, -25, 6, 4.5, 0.6, 'jam1', { gap: 1.1 });
+    this.door(0, 2.25, -32, 6, 4.5, 0.6, 'jam2', { gap: 1.1 });
+    this.trigger(0, 2, -22, 6, 4, 3, () => {
+      G.hud.message('JAMMED DOORS');
+      G.hud.setObjective('SLIDE (CTRL / C) THROUGH THE GAP');
     });
 
-    // ---- 3. corridor B with a drop (z -46 .. -66), floor steps down to -5 ----
-    this.floorCeil(0, -50, 8, 8, 0, 5);           // upper ledge z -46..-54
-    this.box(-4.5, 2.5, -50, 1, 5, 8, 'brick');
-    this.box(4.5, 2.5, -50, 1, 5, 8, 'brick');
-    // the pit: z -54..-66, floor at y=-5
-    this.floorCeil(0, -60, 8, 12, -5, 10, { ceil: false });
-    this.box(0, 5.5, -60, 8, 1, 12, 'dark');       // high ceiling
-    // right pit wall, solid
-    this.box(4.5, 0, -60, 1, 12, 12, 'brick');
-    // left pit wall with a low opening (secret alcove) at z -62.4..-65.6, y -5..-2.5
-    this.box(-4.5, 0, -58.2, 1, 12, 8.4, 'brick');           // z -54..-62.4
-    this.box(-4.5, 0, -65.8, 1, 12, 0.4, 'brick');           // z -65.6..-66
-    this.box(-4.5, 1.75, -64, 1, 8.5, 3.2, 'brick');         // above the opening
-    this.box(0, -2.5, -54.5, 8, 5, 1, 'brick');    // pit front wall, flush with the ledge
-    this.torch(-3.8, -3.5, -58); this.torch(3.8, -3.5, -62);
-    this.light(0, -1, -60, 0xff6622, 16, 16);
-    // secret alcove behind the opening (x -9..-5)
-    this.floorCeil(-7, -64, 4, 3.2, -5, 2.5, { ceil: true });
-    this.box(-9.2, -3.7, -64, 0.5, 2.6, 3.2, 'brick');       // alcove back wall
-    this.box(-7, -3.7, -62.2, 4, 2.6, 0.4, 'brick');         // alcove sides
-    this.box(-7, -3.7, -65.8, 4, 2.6, 0.4, 'brick');
-    this.pickup(-7.5, -4.2, -64, 'secret');
-    // health pickup at pit bottom
-    this.pickup(2, -4.4, -57, 'health');
-
-    // staircase out of the pit: 10 steps x 0.5 rise (auto step-up climbs them)
-    for (let i = 1; i <= 10; i++) {
-      this.box(0, -5 + i * 0.5 - 0.5, -61.05 - i * 0.45, 8, 1, 0.9, 'floor');
+    // ---- T3. collapsed walkway (z -38 .. -58), 9m gap over a fire pit ----
+    this.floorCeil(0, -40.5, 8, 5, 0, 6);          // ledge z -38..-43
+    this.box(0, -0.5, -47.5, 8, 1, 9, 'dark', { collide: false }); // shadowy void hint
+    this.floorCeil(0, -55, 8, 6, 0, 6);            // far ledge z -52..-58
+    this.box(-4.5, 3, -48, 1, 6, 20, 'brick');
+    this.box(4.5, 3, -48, 1, 6, 20, 'brick');
+    this.box(0, 6.5, -47.5, 8, 1, 21, 'dark');     // ceiling over the whole span
+    // the pit: floor at -7, burning
+    this.box(0, -7.5, -47.5, 8, 1, 9, 'floor');
+    this.box(0, -6.9, -47.5, 8, 0.2, 9, 'lava', { collide: false });
+    this.hazards.push({ min: new THREE.Vector3(-4, -8, -52), max: new THREE.Vector3(4, -6.2, -43), dmg: 10 });
+    this.box(0, -3.5, -42.6, 8, 8, 0.8, 'brick');  // pit near wall (below ledge)
+    this.box(0, -3.5, -52.4, 8, 8, 0.8, 'brick');  // pit far wall
+    this.light(0, -4, -47.5, 0xff5510, 16, 14);
+    // mercy stairs out of the pit: climb along the right wall to the far ledge
+    for (let i = 1; i <= 13; i++) {
+      this.box(3.2, -7 + i * 0.55 - 0.5, -43.8 - i * 0.62, 1.6, 1, 1.2, 'floor');
     }
-    // corridor after the climb (z -66 .. -71)
-    this.floorCeil(0, -68.5, 8, 5, 0, 5);
-    this.box(-4.5, 2.5, -68.5, 1, 5, 5, 'brick');
-    this.box(4.5, 2.5, -68.5, 1, 5, 5, 'brick');
+    this.trigger(0, 2, -39.5, 8, 4, 3, () => {
+      G.hud.message('THE WALKWAY IS OUT');
+      G.hud.setObjective('DASH (SHIFT) ACROSS THE GAP');
+    });
+    // secret 2: alcove in the pit's far wall
+    this.floorCeil(0, -53.8, 3, 2, -7, 2.2, { ceil: true });
+    this.pickup(0, -6.3, -53.5, 'secret');
 
-    // ---- 4. chamber TWO (z -71 .. -93, 22x22): husks + shades on ledges ----
-    const c2z = -82;
-    this.floorCeil(0, c2z, 22, 22, 0, 8);
-    this.box(-11.5, 4, c2z, 1, 8, 22, 'brick');
-    this.box(11.5, 4, c2z, 1, 8, 22, 'brick');
-    this.box(-7, 4, -71, 9, 8, 1, 'brick');
-    this.box(7, 4, -71, 9, 8, 1, 'brick');
-    this.box(0, 6, -71, 5, 4.5, 1, 'brick');
-    this.box(-7, 4, -93, 9, 8, 1, 'brick');
-    this.box(7, 4, -93, 9, 8, 1, 'brick');
-    this.box(0, 6.2, -93, 5, 4, 1, 'brick');
+    // ---- R. Revolver Room (z -58 .. -78, 22 wide), dark until pickup ----
+    this.floorCeil(0, -68, 22, 20, 0, 7);
+    this.box(-11.5, 3.5, -68, 1, 7, 20, 'brick');
+    this.box(11.5, 3.5, -68, 1, 7, 20, 'brick');
+    this.box(-7.5, 3.5, -58, 8, 7, 1, 'brick');
+    this.box(7.5, 3.5, -58, 8, 7, 1, 'brick');
+    this.box(0, 5.25, -58, 7, 3.5, 1, 'brick');
+    this.box(-7.5, 3.5, -78, 8, 7, 1, 'brick');
+    this.box(7.5, 3.5, -78, 8, 7, 1, 'brick');
+    this.box(0, 5.5, -78, 7, 3, 1, 'brick');
     // pillars
-    this.box(-5, 2.5, c2z - 3, 1.6, 5, 1.6, 'brick');
-    this.box(5, 2.5, c2z - 3, 1.6, 5, 1.6, 'brick');
-    this.box(-5, 2.5, c2z + 5, 1.6, 5, 1.6, 'brick');
-    this.box(5, 2.5, c2z + 5, 1.6, 5, 1.6, 'brick');
-    // side ledges for shades
-    this.box(-9.5, 2.2, c2z, 3, 0.6, 6, 'panel');
-    this.box(9.5, 2.2, c2z, 3, 0.6, 6, 'panel');
-    this.torch(-10.8, 3.2, c2z - 4, 0xff8820); this.torch(10.8, 3.2, c2z + 4, 0xff8820);
-    this.light(0, 6.5, c2z, 0xff6633, 26, 30);
-    // lava trench across the middle (harmful)
-    this.box(0, 0.05, c2z + 1, 22, 0.12, 2.4, 'lava', { collide: false });
-    this.lavaZones = this.lavaZones || [];
-    this.lavaZones.push({ min: new THREE.Vector3(-11, -1, c2z - 0.2), max: new THREE.Vector3(11, 0.6, c2z + 2.2) });
-    this.light(0, 1, c2z + 1, 0xff4400, 14, 18);
-
-    // shotgun pickup sits center stage
-    this.pickup(0, 1.1, c2z - 5, 'shotgun');
-
-    const door2 = this.door(0, 2.1, -93, 5.2, 4.2, 0.8, 'c2');
-    this.rooms.c2 = { alive: new Set(), door: door2 };
-    this.trigger(0, 2, -74, 10, 6, 3, () => {
-      this.spawnRoom('c2', [
-        [Husk, -6, 1, c2z - 5], [Husk, 6, 1, c2z - 6], [Husk, 0, 1, c2z - 8],
-        [Shade, -9.5, 3.6, c2z], [Shade, 9.5, 3.6, c2z],
-      ]);
-      G.hud.message('GRAB THE SHOTGUN');
-      G.hud.setObjective('EXTERMINATE');
-    });
-
-    // ---- 5. corridor C (z -93 .. -105) ----
-    this.floorCeil(0, -99, 6, 12, 0, 5);
-    this.box(-3.5, 2.5, -99, 1, 5, 12, 'brick');
-    this.box(3.5, 2.5, -99, 1, 5, 12, 'brick');
-    this.torch(-2.8, 1.4, -97); this.torch(2.8, 1.4, -101);
-    this.pickup(0, 0.8, -99, 'health');
-
-    // ---- 6. ARENA (z -105 .. -135, 30x30, high ceiling, lava moat) ----
-    const az = -120;
-    this.floorCeil(0, az, 30, 30, 0, 12);
-    this.box(-15.5, 6, az, 1, 12, 30, 'brick');
-    this.box(15.5, 6, az, 1, 12, 30, 'brick');
-    this.box(-9, 6, -105, 13, 12, 1, 'brick');
-    this.box(9, 6, -105, 13, 12, 1, 'brick');
-    this.box(0, 8.5, -105, 5, 7, 1, 'brick');
-    this.box(-9, 6, -135, 13, 12, 1, 'brick');
-    this.box(9, 6, -135, 13, 12, 1, 'brick');
-    this.box(0, 8.5, -135, 5, 7, 1, 'brick');
-    // corner lava pools (emissive; two shared lights below cover the glow)
-    for (const [lx, lz] of [[-11, az - 11], [11, az - 11], [-11, az + 11], [11, az + 11]]) {
-      this.box(lx, 0.05, lz, 6, 0.12, 6, 'lava', { collide: false });
-      this.lavaZones.push({ min: new THREE.Vector3(lx - 3, -1, lz - 3), max: new THREE.Vector3(lx + 3, 0.6, lz + 3) });
+    for (const [px, pz] of [[-6, -63], [6, -63], [-6, -73], [6, -73]]) {
+      this.box(px, 3.5, pz, 1.4, 7, 1.4, 'brick');
     }
-    this.light(0, 2, az - 11, 0xff4400, 26, 26);
-    this.light(0, 2, az + 11, 0xff4400, 26, 26);
-    // central raised platform
-    this.box(0, 0.6, az, 8, 1.2, 8, 'panel');
-    // jump pillars
-    this.box(-8, 1.4, az + 6, 2.5, 2.8, 2.5, 'brick');
-    this.box(8, 1.4, az - 6, 2.5, 2.8, 2.5, 'brick');
-    this.light(0, 10, az, 0xff5533, 40, 40);
-    this.torch(-14.8, 2, az - 8); this.torch(14.8, 2, az - 8);
-    this.torch(-14.8, 2, az + 8); this.torch(14.8, 2, az + 8);
-    this.pickup(-13, 0.8, az, 'health');
-    this.pickup(13, 0.8, az, 'health');
+    // pedestal with the revolver
+    this.box(0, 0.5, -66, 1.6, 1, 1.6, 'panel');
+    this.box(0, 1.15, -66, 1.2, 0.3, 1.2, 'trim');
+    this.pickup(0, 1.8, -66, 'revolver');
+    // room lights start dark; emissive strips hidden too
+    this.revolverLights = [
+      this.light(0, 6, -63, 0xff7744, 0, 26),
+      this.light(0, 6, -73, 0xff7744, 0, 26),
+    ];
+    this.revolverGlow = [];
+    for (const gz of [-60, -68, -76]) {
+      const strip = this.box(0, 6.6, gz, 18, 0.15, 0.4, 'glowOrange', { collide: false });
+      strip.visible = false;
+      this.revolverGlow.push(strip);
+    }
+    const doorRev = this.door(0, 2, -78, 7, 4, 0.8, 'rev');
+    this.rooms.rev = { alive: new Set(), door: doorRev };
+    this.trigger(0, 2, -61, 12, 5, 3, () => {
+      G.hud.message('SO DARK IN HERE');
+      G.hud.setObjective('TAKE THE REVOLVER');
+    });
+    // secret 3: tucked behind the far-left pillar
+    this.pickup(-8.5, 0.8, -74.5, 'secret');
 
-    const doorFinal = this.door(0, 2.1, -135, 5.2, 4.2, 0.8, 'arena');
-    this.rooms.wave1 = { alive: new Set() };
-    this.rooms.wave2 = { alive: new Set() };
-    this.rooms.wave3 = { alive: new Set(), door: doorFinal };
+    // ---- G1. glass panes room (z -78 .. -90) ----
+    this.floorCeil(0, -84, 10, 12, 0, 5);
+    this.box(-5.5, 2.5, -84, 1, 5, 12, 'brick');
+    this.box(5.5, 2.5, -84, 1, 5, 12, 'brick');
+    this.torch(-4.8, 1.6, -81, 0x39c2ff); this.torch(4.8, 1.6, -87, 0x39c2ff);
+    // two floor-to-lintel panes that must be broken
+    this.breakable(0, 2.25, -81.5, 10, 4.5, 0.25, { glass: true });
+    this.breakable(0, 2.25, -85.5, 10, 4.5, 0.25, { glass: true });
+    this.light(0, 4, -84, 0x9fdcff, 10, 12);
+    this.trigger(0, 2, -79.5, 10, 4, 2, () => {
+      G.hud.setObjective('GLASS BREAKS. EVERYTHING BREAKS');
+    });
+    this.checkpoint(0, 0, -88);
 
-    this.trigger(0, 2, -108, 10, 6, 3, () => {
-      G.hud.message('THE PIT AWAKENS');
-      G.hud.setObjective('SURVIVE THE WAVES');
-      G.audio.wardenRoar();
-      this.spawnRoom('wave1', [
-        [Husk, -8, 1, az - 4], [Husk, 8, 1, az - 4],
-        [Husk, -4, 1, az - 10], [Husk, 4, 1, az - 10],
+    // ---- G2. glass floor room (z -90 .. -104, 14 wide) ----
+    this.box(0, 6.5, -97, 14, 1, 14, 'dark');      // ceiling only; the floor is rims + glass
+    this.box(-7.5, 3, -97, 1, 6, 14, 'brick');
+    this.box(7.5, 3, -97, 1, 6, 14, 'brick');
+    this.box(-5, 3, -90, 5, 6, 1, 'brick');
+    this.box(5, 3, -90, 5, 6, 1, 'brick');
+    this.box(0, 4.75, -90, 6, 2.5, 1, 'brick');
+    this.box(-5, 3, -104, 5, 6, 1, 'brick');
+    this.box(5, 3, -104, 5, 6, 1, 'brick');
+    this.box(0, 4.75, -104, 6, 2.5, 1, 'brick');
+    // central pit covered by four glass panes
+    // pit: x -4..4, z -101..-93, depth 3
+    this.box(-5.5, -1.5, -97, 3, 3, 14, 'floor');   // solid rim left
+    this.box(5.5, -1.5, -97, 3, 3, 14, 'floor');    // solid rim right
+    this.box(0, -1.5, -91.5, 8, 3, 3, 'floor');     // rim near
+    this.box(0, -1.5, -102.5, 8, 3, 3, 'floor');    // rim far
+    this.box(0, -3.5, -97, 14, 1, 14, 'floor');     // pit bottom
+    for (const [gx, gz] of [[-2, -95], [2, -95], [-2, -99], [2, -99]]) {
+      this.breakable(gx, -0.15, gz, 4, 0.3, 4, { glass: true });
+    }
+    this.light(0, 5, -97, 0xff7744, 18, 20);
+    this.trigger(0, 2, -92, 10, 5, 3, () => {
+      G.hud.message('THIN ICE');
+      G.hud.setObjective('EXTERMINATE');
+      this.spawnRoom('g2', [
+        [Filth, -4, 1, -99], [Filth, 4, 1, -99], [Filth, 0, 1, -101], [Filth, 5, 1, -94],
       ]);
-      this.rooms.wave1.next = () => {
-        G.hud.message('WAVE 2');
-        this.spawnRoom('wave2', [
-          [Shade, -11, 1, az - 8], [Shade, 11, 1, az - 8],
-          [Husk, 0, 1, az - 12], [Husk, -6, 1, az + 8], [Husk, 6, 1, az + 8],
-        ]);
-        this.rooms.wave2.next = () => {
-          G.hud.message('IT HEARS YOU');
-          G.audio.wardenRoar();
-          this.spawnRoom('wave3', [
-            [Warden, 0, 1.8, az - 8],
-            [Husk, -10, 1, az + 4], [Husk, 10, 1, az + 4],
-          ]);
-        };
-      };
+    });
+    this.rooms.g2 = { alive: new Set(), door: null };
+    // secret 4: in the pit, visible through the glass
+    this.pickup(3, -2.5, -100, 'secret');
+
+    // ---- G3. glass + strays room (z -104 .. -118, 14 wide) ----
+    this.floorCeil(0, -111, 14, 14, 0, 7);
+    this.box(-7.5, 3.5, -111, 1, 7, 14, 'brick');
+    this.box(7.5, 3.5, -111, 1, 7, 14, 'brick');
+    this.box(-5, 3.5, -118, 5, 7, 1, 'brick');
+    this.box(5, 3.5, -118, 5, 7, 1, 'brick');
+    this.box(0, 5.25, -118, 6, 3.5, 1, 'brick');
+    // stray perches
+    this.box(-6, 1.25, -114, 2.5, 2.5, 2.5, 'panel');
+    this.box(6, 1.25, -108, 2.5, 2.5, 2.5, 'panel');
+    this.light(0, 5.5, -111, 0xff6633, 20, 22);
+    const doorG3 = this.door(0, 2, -118, 6, 4, 0.8, 'g3');
+    this.rooms.g3 = { alive: new Set(), door: doorG3 };
+    this.trigger(0, 2, -106, 12, 5, 3, () => {
+      G.hud.message('SOMETHING IS THROWING THINGS');
+      G.hud.setObjective('PUNCH (F) THEIR ORBS BACK');
+      this.spawnRoom('g3', [
+        [Stray, -6, 3.5, -114], [Stray, 6, 3.5, -108],
+        [Filth, -3, 1, -113], [Filth, 3, 1, -113], [Filth, 0, 1, -115],
+      ]);
+    });
+    this.pickup(0, 0.8, -105.5, 'health');
+
+    // ---- GW. grinder walkway (z -118 .. -142, 10 wide) ----
+    this.floorCeil(0, -120, 10, 4, 0, 6);          // near ledge z -118..-122
+    this.floorCeil(0, -140, 10, 4, 0, 6);          // far ledge z -138..-142
+    this.box(-5.5, 3, -130, 1, 6, 24, 'brick');
+    this.box(5.5, 3, -130, 1, 6, 24, 'brick');
+    this.box(0, 6.5, -130, 10, 1, 24, 'dark');
+    // the pit with grinders
+    this.box(0, -6.5, -130, 10, 1, 16, 'floor');   // pit bottom z -122..-138
+    this.box(0, -3, -121.6, 10, 6, 0.8, 'brick');  // pit walls under ledges
+    this.box(0, -3, -138.4, 10, 6, 0.8, 'brick');
+    // three grinder drums across the pit
+    for (const gz of [-126, -130, -134]) {
+      const drum = new THREE.Mesh(new THREE.CylinderGeometry(1.4, 1.4, 9, 10), this.mats.dark);
+      drum.rotation.z = Math.PI / 2;
+      drum.position.set(0, -4.2, gz);
+      this.G.scene.add(drum);
+      const teeth = new THREE.Mesh(new THREE.BoxGeometry(9.2, 0.35, 0.35), this.mats.glowOrange);
+      drum.add(teeth);
+      const teeth2 = teeth.clone(); teeth2.rotation.x = Math.PI / 2; drum.add(teeth2);
+      this.spinners.push({ mesh: drum, axis: 'x', speed: 4 });
+    }
+    this.hazards.push({ min: new THREE.Vector3(-5, -7, -138), max: new THREE.Vector3(5, -2.4, -122), dmg: 25 });
+    this.light(0, -1, -130, 0xff5510, 14, 20);
+    // glass walkway down the middle: 3 wide, 8 segments of 2m
+    for (let i = 0; i < 8; i++) {
+      this.breakable(0, -0.15, -123 - i * 2, 3, 0.3, 2, { glass: true });
+    }
+    const doorGW = this.door(0, 2, -142, 6, 4, 0.8, 'gw');
+    this.rooms.gw = { alive: new Set(), door: doorGW };
+    this.trigger(0, 2, -119.5, 10, 5, 2.5, () => {
+      G.hud.message('MIND THE GRINDERS');
+      G.hud.setObjective('CROSS. OR DROP THEM IN');
+      this.spawnRoom('gw', [
+        [Filth, -2, 1, -139], [Filth, 2, 1, -139], [Filth, 0, 1, -140.5],
+        [Filth, -3.5, 1, -140.5], [Filth, 3.5, 1, -139.5],
+      ]);
     });
 
-    // ---- 7. exit hall + elevator (z -135 .. -148) ----
-    this.floorCeil(0, -141, 6, 12, 0, 5);
-    this.box(-3.5, 2.5, -141, 1, 5, 12, 'brick');
-    this.box(3.5, 2.5, -141, 1, 5, 12, 'brick');
-    this.torch(-2.8, 1.4, -139, 0x39c2ff); this.torch(2.8, 1.4, -143, 0x39c2ff);
-    // elevator cab
-    this.floorCeil(0, -150.5, 6, 7, 0, 4);
-    this.box(-3.5, 2, -150.5, 1, 4, 7, 'panel');
-    this.box(3.5, 2, -150.5, 1, 4, 7, 'panel');
-    this.box(0, 2, -154.5, 6, 4, 1, 'panel');
-    this.light(0, 3.2, -150.5, 0x9fdcff, 16, 10);
-    this.trigger(0, 2, -151, 5, 4, 4, () => G.onLevelComplete(), 'exit');
+    // ---- TC. turbine chamber (z -142 .. -160, 18 wide, tall) ----
+    // no full floor: solid rims around an open shaft, glass walkway across it
+    this.box(0, 12.5, -151, 18, 1, 18, 'dark');    // ceiling
+    this.box(-9.5, 3, -151, 1, 20, 18, 'brick');
+    this.box(9.5, 3, -151, 1, 20, 18, 'brick');
+    this.box(-6, 5, -142, 7, 12, 1, 'brick');
+    this.box(6, 5, -142, 7, 12, 1, 'brick');
+    this.box(0, 7.5, -142, 5, 9, 1, 'brick');
+    this.box(-6, 5, -160, 7, 12, 1, 'brick');
+    this.box(6, 5, -160, 7, 12, 1, 'brick');
+    this.box(0, 7.5, -160, 5, 9, 1, 'brick');
+    // rims double as the shaft's upper walls (top flush with y 0)
+    this.box(-7.5, -4, -151, 3, 8, 18, 'floor');   // left rim, x -9..-6
+    this.box(7.5, -4, -151, 3, 8, 18, 'floor');    // right rim, x 6..9
+    this.box(0, -4, -143.5, 18, 8, 3, 'floor');    // near strip, z -142..-145
+    this.box(0, -4, -158.5, 18, 8, 3, 'floor');    // far strip, z -157..-160
+    // glass walkway down the middle over the shaft
+    for (let i = 0; i < 6; i++) {
+      this.breakable(0, -0.15, -146 - i * 2, 3, 0.3, 2, { glass: true });
+    }
+    // fan at the bottom of the 8-deep shaft
+    this.box(0, -8.5, -151, 12, 1, 12, 'floor');
+    const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.8, 1, 8), this.mats.trim);
+    hub.position.set(0, -7.4, -151);
+    this.G.scene.add(hub);
+    const fan = new THREE.Group();
+    for (let i = 0; i < 4; i++) {
+      const blade = new THREE.Mesh(new THREE.BoxGeometry(10, 0.25, 1.4), this.mats.dark);
+      blade.rotation.y = (Math.PI / 2) * i + Math.PI / 4;
+      const tip = new THREE.Mesh(new THREE.BoxGeometry(10, 0.28, 0.2), this.mats.glowOrange);
+      tip.rotation.copy(blade.rotation);
+      fan.add(blade, tip);
+    }
+    fan.position.set(0, -7.2, -151);
+    this.G.scene.add(fan);
+    this.spinners.push({ mesh: fan, axis: 'y', speed: 3.2 });
+    this.hazards.push({ min: new THREE.Vector3(-6, -8, -157), max: new THREE.Vector3(6, -6.2, -145), dmg: 30 });
+    this.light(0, -5, -151, 0xff8830, 16, 16);
+    this.light(0, 8, -151, 0xff6633, 22, 26);
+    this.trigger(0, 2, -143.5, 10, 5, 2.5, () => {
+      G.hud.message('THE TURBINE STILL TURNS');
+      G.hud.setObjective('EXTERMINATE');
+      this.spawnRoom('tc', [
+        [Stray, -7.5, 6.5, -156], [Stray, 7.5, 6.5, -147],
+        [Filth, -7.5, 1, -155], [Filth, 7.5, 1, -155], [Filth, 0, 1, -158],
+      ]);
+    });
+    // stray perches high on the wall rims
+    this.box(-7.5, 2.75, -156, 3, 5.5, 3, 'panel');
+    this.box(7.5, 2.75, -147, 3, 5.5, 3, 'panel');
+    // secret 5: high ledge, wall-jump between the perch and the wall
+    this.box(8.2, 6.5, -155, 2, 0.4, 2, 'panel');
+    this.pickup(8.2, 7.3, -155, 'secret');
+    const doorTC = this.door(0, 2, -160, 5, 4, 0.8, 'tc');
+    this.rooms.tc = { alive: new Set(), door: doorTC };
+    this.checkpoint(-6, 0, -144);
 
-    // sky glow strips high up in the arena (hell ambience)
-    this.box(0, 11.4, az, 26, 0.2, 0.6, 'glowRed', { collide: false });
-    this.box(0, 11.4, az - 8, 26, 0.2, 0.6, 'glowOrange', { collide: false });
-    this.box(0, 11.4, az + 8, 26, 0.2, 0.6, 'glowOrange', { collide: false });
+    // ---- B. boss room + exit elevator (z -160 .. -180) ----
+    // (front wall at z=-160 is shared with the turbine chamber's back wall)
+    this.floorCeil(0, -170, 20, 20, 0, 11);
+    this.box(-10.5, 5.5, -170, 1, 11, 20, 'brick');
+    this.box(10.5, 5.5, -170, 1, 11, 20, 'brick');
+    this.box(-6.5, 5.5, -180, 8, 11, 1, 'brick');
+    this.box(6.5, 5.5, -180, 8, 11, 1, 'brick');
+    this.box(0, 7.25, -180, 6, 7.5, 1, 'brick');
+    this.light(0, 8, -170, 0xff5533, 30, 30);
+    this.torch(-9.8, 2, -164); this.torch(9.8, 2, -164);
+    this.torch(-9.8, 2, -176); this.torch(9.8, 2, -176);
+    this.pickup(-8, 0.8, -170, 'health');
+    this.pickup(8, 0.8, -170, 'health');
+    const doorBoss = this.door(0, 2.25, -180, 5.5, 4.5, 0.8, 'boss');
+    this.rooms.boss = { alive: new Set(), door: doorBoss };
+    this.trigger(0, 2, -163, 14, 6, 3, () => {
+      G.hud.message('SOMETHING WICKED', 3000);
+      G.hud.setObjective('DODGE THE BEAM. PARRY THE ORBS');
+      this.spawnRoom('boss', [[MaliciousFace, 0, 4.5, -173]]);
+    });
 
-    // global fill lights (do most of the work now that torches are unlit)
+    // exit elevator (z -180 .. -186)
+    this.floorCeil(0, -183, 6, 6, 0, 4);
+    this.box(-3.5, 2, -183, 1, 4, 6, 'panel');
+    this.box(3.5, 2, -183, 1, 4, 6, 'panel');
+    this.box(0, 2, -186.5, 6, 4, 1, 'panel');
+    this.light(0, 3.2, -183, 0x9fdcff, 16, 10);
+    this.trigger(0, 2, -184, 5, 4, 3, () => G.onLevelComplete(), 'exit');
+
+    // global fill lights
     const amb = new THREE.AmbientLight(0x664422, 1.5);
     G.scene.add(amb);
     const hemi = new THREE.HemisphereLight(0xaa4a33, 0x1a0808, 0.9);
     G.scene.add(hemi);
-  }
-
-  // lava damage check, called from main loop
-  checkHazards(dt) {
-    const P = this.G.player;
-    if (!this.lavaZones || P.dead) return;
-    for (const z of this.lavaZones) {
-      if (P.pos.x > z.min.x && P.pos.x < z.max.x &&
-          P.pos.y - P.he.y < z.max.y && P.pos.y > z.min.y &&
-          P.pos.z > z.min.z && P.pos.z < z.max.z) {
-        this._lavaT = (this._lavaT || 0) + dt;
-        if (this._lavaT > 0.25) {
-          this._lavaT = 0;
-          P.hurtCooldown = 0; // lava ignores mercy window
-          P.damage(10);
-        }
-        return;
-      }
-    }
   }
 }

@@ -95,7 +95,8 @@ export class Hud {
   }
 
   setWeapon(name) {
-    this.el.weapon.textContent = name === 'revolver' ? 'PIERCER REVOLVER' : 'PUMP SHOTGUN';
+    const names = { none: 'FEEDBACKER', revolver: 'PIERCER REVOLVER', shotgun: 'PUMP SHOTGUN' };
+    this.el.weapon.textContent = names[name] || name;
     this.el.chargeBox.style.display = name === 'revolver' ? 'block' : 'none';
   }
 

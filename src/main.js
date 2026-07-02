@@ -37,6 +37,7 @@ const G = {
   kills: 0,
   startTime: 0,
   hitstop: 0, // brief slow-motion on parry
+  checkpoint: null, // { x, y, z } respawn point
   spawnProjectile(pos, vel, opts) {
     G.projectiles.push(new Projectile(G, pos, vel, opts));
   },
@@ -47,8 +48,26 @@ const G = {
   onPlayerDeath() {
     G.state = 'dead';
     G.audio.combat = 0;
+    document.getElementById('death-hint').textContent = G.checkpoint
+      ? 'CLICK OR PRESS R — RESPAWN AT CHECKPOINT'
+      : 'CLICK OR PRESS R — TRY AGAIN';
     document.getElementById('death-screen').style.display = 'flex';
     document.exitPointerLock();
+  },
+  respawn() {
+    if (!G.checkpoint) { location.reload(); return; }
+    const P = G.player;
+    P.dead = false;
+    P.hp = P.maxHp;
+    P.stamina = 3;
+    P.vel.set(0, 0, 0);
+    P.pos.set(G.checkpoint.x, G.checkpoint.y, G.checkpoint.z);
+    if (P.sliding) { P.he.y = P.heStand; P.sliding = false; }
+    P.slamming = false;
+    P.dashT = 0;
+    G.state = 'playing';
+    document.getElementById('death-screen').style.display = 'none';
+    G.input.requestLock();
   },
   onLevelComplete() {
     if (G.state !== 'playing') return;
@@ -86,11 +105,11 @@ G.player = new Player(G);
 G.hud = new Hud(G);
 G.weapons = new Weapons(G, camera);
 G.level = new Level(G);
-G.hud.setWeapon('revolver');
-G.hud.setObjective('MOVE OUT');
+G.hud.setWeapon('none');
+G.hud.setObjective('DESCEND');
 
-// spawn point: inside the start elevator, facing the door (-z)
-G.player.pos.set(0, 1.2, 1.5);
+// spawn point: falling down the entry shaft, facing -z
+G.player.pos.set(0, 10, 1.5);
 G.player.yaw = 0;
 
 // ---- prewarm: compile every shader and upload every texture during load,
@@ -114,9 +133,10 @@ menu.addEventListener('click', () => {
   G.audio.resume();
   G.input.requestLock();
 });
-document.getElementById('death-screen').addEventListener('click', () => location.reload());
+document.getElementById('death-screen').addEventListener('click', () => G.respawn());
 window.addEventListener('keydown', (e) => {
-  if (e.code === 'KeyR' && (G.state === 'dead' || G.state === 'win')) location.reload();
+  if (e.code === 'KeyR' && G.state === 'dead') G.respawn();
+  if (e.code === 'KeyR' && G.state === 'win') location.reload();
 });
 document.getElementById('win-screen').addEventListener('click', () => location.reload());
 

@@ -119,12 +119,17 @@ export function rayAabb(origin, dir, box) {
 
 // Nearest level-geometry hit along a ray. Returns distance or maxDist.
 export function raycastLevel(origin, dir, colliders, maxDist = 1000) {
-  let best = maxDist;
+  return raycastLevelHit(origin, dir, colliders, maxDist).dist;
+}
+
+// Same, but also reports which collider was struck (for breakable glass).
+export function raycastLevelHit(origin, dir, colliders, maxDist = 1000) {
+  let best = maxDist, hit = null;
   for (const c of colliders) {
     const t = rayAabb(origin, dir, c);
-    if (t < best) best = t;
+    if (t < best) { best = t; hit = c; }
   }
-  return best;
+  return { dist: best, collider: hit };
 }
 
 // Probe the four horizontal directions for a wall right next to the box.

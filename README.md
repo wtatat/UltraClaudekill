@@ -44,17 +44,30 @@ python3 -m http.server 8000
   multi-kills and weapon swapping raise your rank from **D — DRAB** up to
   **U — ULTRACLAUDEKILL**. It decays when you play passively and drops when
   you take hits.
-- **Parry** — enemies flash yellow while winding up an attack; punch them
-  in that window to cancel the attack. Punching an enemy orb reflects it
-  towards your crosshair with boosted damage (orbs stay parryable for a
-  split second even after touching you). A successful parry fully restores
-  stamina, heals, and pays out big style. Spamming punches raises the
-  punch cooldown.
-- **Dashing grants brief invulnerability.** Lava does not care about your
-  mercy window.
-- The level: start elevator → burning corridor → three combat chambers →
-  a pit with **one secret** (+25 max HP) → wave arena guarded by the
-  **WARDEN** → exit elevator with your final rank tally.
+- **Parry** — punching an enemy orb reflects it towards your crosshair
+  with boosted damage (orbs stay parryable for a split second even after
+  touching you). A successful parry fully restores stamina, heals, and
+  pays out big style. Spamming punches raises the punch cooldown.
+- **Dashing grants brief invulnerability.** Hazards do not care about
+  your mercy window.
+- **Enemies** (behavior researched from the original):
+  - *Filth* — armless rusher, faster than your walk speed, jumping bite.
+    The bite can't be parried, but **any damage cancels it**. One revolver
+    shot kills.
+  - *Stray* — keeps medium distance, backs off when you close in, charges
+    a glowing orb before each throw. **Shoot the orb mid-charge to
+    detonate the Stray.** The thrown orb is parryable.
+  - *Malicious Face* — floating stone head boss. Alternates a 10-orb
+    barrage (parryable) with a telegraphed beam (dodge it — dash). Below
+    half health it enrages and fires double beams.
+- **The level** follows the original 0-1 room sequence: drop shaft →
+  "KEEP OUT" planks (punch through) → jammed doors (slide the gap) →
+  collapsed walkway (dash across) → the dark **Revolver Room** (lights
+  snap on when you take the gun; then the Filth come) → three **Glass
+  Rooms** with a checkpoint → the **Grinder Walkway** (glass over
+  grinders; drop 5 enemies in for the challenge) → the **Turbine
+  Chamber** → the boss and the exit elevator. **5 secrets** (+10 max HP
+  each). Checkpoints respawn you on death.
 
 ## Tech
 

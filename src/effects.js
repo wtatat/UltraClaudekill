@@ -19,6 +19,8 @@ export class Effects {
       spark: new THREE.MeshBasicMaterial({ color: 0xffd06a }),
       smoke: new THREE.MeshBasicMaterial({ color: 0x333333, transparent: true, opacity: 0.7 }),
       gib: new THREE.MeshBasicMaterial({ color: 0x7a1010 }),
+      glass: new THREE.MeshBasicMaterial({ color: 0xbfe8f5, transparent: true, opacity: 0.7 }),
+      gibWood: new THREE.MeshBasicMaterial({ color: 0x6b4a26 }),
     };
 
     // particle pool

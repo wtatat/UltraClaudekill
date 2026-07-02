@@ -142,6 +142,16 @@ export class AudioSys {
     setTimeout(() => this._tone(0.22, { from: 1760, to: 2200, type: 'triangle', gain: 0.25 }), 70);
   }
   parryPing() { this._tone(0.12, { from: 1500, to: 1900, type: 'sine', gain: 0.2 }); }
+  glassBreak() {
+    this._noise(0.3, { freq: 4500, gain: 0.5, type: 'highpass' });
+    this._noise(0.15, { freq: 2500, gain: 0.35, type: 'bandpass', q: 1.2 });
+    setTimeout(() => this._noise(0.12, { freq: 5000, gain: 0.2, type: 'highpass' }), 90);
+  }
+  plankBreak() {
+    this._noise(0.2, { freq: 500, gain: 0.55 });
+    this._noise(0.12, { freq: 1400, gain: 0.3, type: 'bandpass', q: 1.5 });
+    this._tone(0.12, { from: 180, to: 70, type: 'square', gain: 0.2 });
+  }
   checkpoint() { this._tone(0.3, { from: 440, to: 880, type: 'triangle', gain: 0.25 }); }
 
   // ---- ambience: low rumbling drone ----

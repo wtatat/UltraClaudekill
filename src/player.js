@@ -226,6 +226,12 @@ export class Player {
     this.onGround = res.onGround;
     this.airTime = this.onGround ? 0 : this.airTime + dt;
 
+    // slamming onto glass punches straight through it
+    if (this.onGround && !wasGround && this.slamming && G.level && G.level.breakGlassUnder(this)) {
+      this.onGround = false;
+      this.vel.y = SLAM_V;
+    }
+
     if (this.onGround && !wasGround) {
       this.wallJumps = MAX_WALL_JUMPS;
       if (this.slamming) {
