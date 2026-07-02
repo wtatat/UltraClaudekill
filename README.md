@@ -74,6 +74,30 @@ python3 -m http.server 8000
   Chamber** → the boss and the exit elevator. **5 secrets** (+10 max HP
   each). Checkpoints respawn you on death.
 
+## RL Lab — an agent that learns to play
+
+Open `rl.html` for a built-in reinforcement-learning sandbox: a DQN agent
+(hand-written MLP + Adam + replay buffer + target network, zero
+dependencies) learns combat in a dedicated arena against waves of Filth
+and a Stray.
+
+- **Observations (49 floats)**: own hp/stamina/velocity, the 4 nearest
+  enemies in egocentric coordinates with attack-telegraph flags, the 2
+  nearest hostile orbs with velocities.
+- **Actions (10)**: 6 movement directions, jump, dash, idle, and fire
+  (aiming is automatic at the nearest enemy — the net learns spacing,
+  dodging and trigger discipline, not mouse math).
+- **Reward**: damage dealt and kills pay, damage taken and time cost,
+  dying is a big penalty, clearing all 3 waves a big bonus.
+- **TRAIN** runs the simulation headless-fast (hundreds of env steps/s)
+  with a live learning curve; **WATCH** plays the greedy policy in first
+  person at real time. `rl.html?mode=play` auto-loads the bundled
+  pretrained weights (`assets/rl-weights.json`).
+
+The bundled net was trained for ~800 episodes: it clears all three waves
+with a perfect 13/13 kills in 12/12 greedy evaluation episodes (a random
+policy mostly dies with 2–10 kills).
+
 ## Tech
 
 - [Three.js](https://threejs.org/) (vendored in `vendor/`, MIT license)
