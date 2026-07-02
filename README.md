@@ -26,10 +26,10 @@ python3 -m http.server 8000
 |---|---|
 | WASD | Move |
 | Mouse | Look |
-| Space | Jump |
-| Shift | Dash (3 stamina bars, regenerating) |
-| Ctrl (ground) | Slide — keeps speed, slide-jump for a boost |
-| Ctrl (air) | Ground slam — damages everything around the impact |
+| Space | Jump; in the air near a wall — wall jump (up to 3 per airtime) |
+| Shift | Dash — costs 1 of 3 stamina bars, regen 0.7/s (pauses while sliding) |
+| Ctrl or C (ground) | Slide — keeps speed, slide-jump for a boost |
+| Ctrl or C (air) | Ground slam; keep holding to come out sliding |
 | LMB | Fire |
 | RMB (revolver) | Hold to charge a piercing shot (3s cooldown) |
 | 1 / 2 / Q | Switch weapons |

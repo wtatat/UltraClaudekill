@@ -124,6 +124,7 @@ export class Level {
     mesh.position.set(cx, cy, cz);
     this.G.scene.add(mesh);
     if (collide) this.G.colliders.push(aabb(cx, cy, cz, w, h, d));
+    if (mat === 'lava') (this._lavaMats = this._lavaMats || []).push(material);
     return mesh;
   }
 
@@ -140,12 +141,11 @@ export class Level {
     return l;
   }
 
+  // Torches are emissive-only: real lights are a scarce resource (every
+  // point light is evaluated in every shader), so rooms get one or two
+  // area lights instead and torches just glow.
   torch(x, y, z, color = 0xff8820) {
     this.box(x, y, z, 0.18, 0.5, 0.18, color === 0xff8820 ? 'glowOrange' : 'glowBlue', { collide: false });
-    const l = this.light(x, y + 0.4, z, color, 18, 14);
-    l.userData.base = l.intensity;
-    l.userData.phase = Math.random() * 10;
-    (this._flickers = this._flickers || []).push(l);
   }
 
   door(cx, cy, cz, w, h, d, name) {
@@ -205,7 +205,6 @@ export class Level {
     mesh.position.set(x, y, z);
     this.G.scene.add(mesh);
     this.pickups.push({ mesh, r: 1.2, fn, taken: false, baseY: y });
-    this.light(x, y + 0.5, z, kind === 'health' ? 0xff3020 : (kind === 'shotgun' ? 0xffffff : 0x39c2ff), 10, 8);
   }
 
   spawnRoom(name, list) {
@@ -233,10 +232,10 @@ export class Level {
   }
 
   update(dt, t) {
-    // torch flicker
-    for (const l of this._flickers || []) {
-      l.intensity = l.userData.base * (0.85 + Math.sin(t * 9 + l.userData.phase) * 0.08 + Math.sin(t * 23 + l.userData.phase * 2) * 0.07);
-    }
+    // shared flame flicker on the emissive materials
+    this.mats.glowOrange.emissiveIntensity = 2 + Math.sin(t * 9) * 0.25 + Math.sin(t * 23) * 0.2;
+    const lavaGlow = 0.9 + Math.sin(t * 5) * 0.12;
+    for (const m of this._lavaMats || []) m.emissiveIntensity = lavaGlow;
     // doors animate up
     for (const d of this.doors) {
       if (d.open && d.t < 1) {
@@ -435,12 +434,13 @@ export class Level {
     this.box(-9, 6, -135, 13, 12, 1, 'brick');
     this.box(9, 6, -135, 13, 12, 1, 'brick');
     this.box(0, 8.5, -135, 5, 7, 1, 'brick');
-    // corner lava pools
+    // corner lava pools (emissive; two shared lights below cover the glow)
     for (const [lx, lz] of [[-11, az - 11], [11, az - 11], [-11, az + 11], [11, az + 11]]) {
       this.box(lx, 0.05, lz, 6, 0.12, 6, 'lava', { collide: false });
       this.lavaZones.push({ min: new THREE.Vector3(lx - 3, -1, lz - 3), max: new THREE.Vector3(lx + 3, 0.6, lz + 3) });
-      this.light(lx, 1.5, lz, 0xff4400, 20, 16);
     }
+    this.light(0, 2, az - 11, 0xff4400, 26, 26);
+    this.light(0, 2, az + 11, 0xff4400, 26, 26);
     // central raised platform
     this.box(0, 0.6, az, 8, 1.2, 8, 'panel');
     // jump pillars
@@ -500,10 +500,10 @@ export class Level {
     this.box(0, 11.4, az - 8, 26, 0.2, 0.6, 'glowOrange', { collide: false });
     this.box(0, 11.4, az + 8, 26, 0.2, 0.6, 'glowOrange', { collide: false });
 
-    // global fill lights
-    const amb = new THREE.AmbientLight(0x552211, 1.1);
+    // global fill lights (do most of the work now that torches are unlit)
+    const amb = new THREE.AmbientLight(0x664422, 1.5);
     G.scene.add(amb);
-    const hemi = new THREE.HemisphereLight(0x883322, 0x110505, 0.6);
+    const hemi = new THREE.HemisphereLight(0xaa4a33, 0x1a0808, 0.9);
     G.scene.add(hemi);
   }
 

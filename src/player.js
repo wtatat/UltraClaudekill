@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { clamp, moveAndCollide } from './utils.js';
+import { clamp, moveAndCollide, wallNormal } from './utils.js';
 
 const WALK_SPEED = 11;
 const AIR_ACCEL = 40;
@@ -7,9 +7,13 @@ const GRAVITY = 32;
 const JUMP_V = 11.5;
 const DASH_SPEED = 27;
 const DASH_TIME = 0.14;
-const SLIDE_SPEED = 16;
+const SLIDE_SPEED = 18;
 const SLAM_V = -40;
 const MAX_STAMINA = 3;
+const STAMINA_REGEN = 0.7;    // per second, like Standard difficulty
+const MAX_WALL_JUMPS = 3;     // per airtime
+const WALL_JUMP_V = 10.5;
+const WALL_JUMP_PUSH = 9;
 const HARD_DEATH_Y = -60;
 
 export class Player {
@@ -36,6 +40,26 @@ export class Player {
     this.dead = false;
     this.stepT = 0;
     this.landVel = 0;
+    this.wallJumps = MAX_WALL_JUMPS;
+    this.targetFov = 95;
+    this.airTime = 0;
+  }
+
+  slideKeyDown(input) { return input.down('ControlLeft') || input.down('ControlRight') || input.down('KeyC'); }
+  slideKeyPressed(input) { return input.justPressed('ControlLeft') || input.justPressed('ControlRight') || input.justPressed('KeyC'); }
+
+  _startSlide(dir) {
+    this.sliding = true;
+    this.slideDir.copy(dir);
+    this.he.y = this.heSlide;
+    this.pos.y -= (this.heStand - this.heSlide) - 0.01;
+    this.G.audio.slide();
+  }
+
+  _stopSlide() {
+    this.he.y = this.heStand;
+    this.pos.y += (this.heStand - this.heSlide) + 0.01;
+    this.sliding = false;
   }
 
   get eyePos() {
@@ -88,7 +112,8 @@ export class Player {
     this.pitch = clamp(this.pitch - mdy * input.sensitivity, -1.53, 1.53);
 
     this.hurtCooldown = Math.max(0, this.hurtCooldown - dt);
-    this.stamina = Math.min(MAX_STAMINA, this.stamina + dt * 0.9);
+    // stamina regen pauses while sliding, like in the original
+    if (!this.sliding) this.stamina = Math.min(MAX_STAMINA, this.stamina + dt * STAMINA_REGEN);
 
     // wish direction
     const wish = new THREE.Vector3();
@@ -99,23 +124,23 @@ export class Player {
     if (wish.lengthSq() > 0) wish.normalize();
 
     // --- dash ---
-    if (input.justPressed('ShiftLeft') && this.stamina >= 1 && this.dashT <= 0) {
-      this.stamina -= 1;
-      this.dashT = DASH_TIME;
-      this.dashDir.copy(wish.lengthSq() > 0 ? wish : this.forwardFlat());
-      this.sliding = false;
-      G.audio.dash();
-      G.hud.style.add(2, null);
+    if (input.justPressed('ShiftLeft') && this.dashT <= 0) {
+      if (this.stamina >= 1) {
+        this.stamina -= 1;
+        this.dashT = DASH_TIME;
+        this.dashDir.copy(wish.lengthSq() > 0 ? wish : this.forwardFlat());
+        if (this.sliding) this._stopSlide();
+        G.audio.dash();
+        G.hud.style.add(2, null);
+      } else {
+        G.audio._tone(0.08, { from: 200, to: 120, type: 'square', gain: 0.12 }); // out of stamina
+      }
     }
 
-    // --- slide ---
-    if (input.justPressed('ControlLeft')) {
+    // --- slide / slam ---
+    if (this.slideKeyPressed(input)) {
       if (this.onGround && !this.sliding) {
-        this.sliding = true;
-        this.slideDir.copy(wish.lengthSq() > 0 ? wish : this.forwardFlat());
-        this.he.y = this.heSlide;
-        this.pos.y -= (this.heStand - this.heSlide) - 0.01;
-        G.audio.slide();
+        this._startSlide(wish.lengthSq() > 0 ? wish : this.forwardFlat());
       } else if (!this.onGround && !this.slamming) {
         // ground slam
         this.slamming = true;
@@ -123,27 +148,47 @@ export class Player {
         this.dashT = 0;
       }
     }
-    if (this.sliding && (!input.down('ControlLeft') || !this.onGround)) {
-      // try to stand up (check headroom)
-      this.he.y = this.heStand;
-      this.pos.y += (this.heStand - this.heSlide) + 0.01;
-      this.sliding = false;
+    // stand up when the key is released, or after genuinely leaving the
+    // ground (airTime guard: one-frame contact flickers must not end a slide)
+    if (this.sliding && (!this.slideKeyDown(input) || this.airTime > 0.1)) {
+      const airborne = this.airTime > 0.1;
+      this._stopSlide();
+      // slide key held while flying off a ledge → turn into a slam
+      if (airborne && this.slideKeyDown(input) && !this.slamming) {
+        this.slamming = true;
+        this.vel.set(0, SLAM_V, 0);
+        this.dashT = 0;
+      }
     }
 
-    // --- jump ---
-    if (input.justPressed('Space') && (this.onGround || this.coyote > 0)) {
-      this.vel.y = JUMP_V;
-      this.onGround = false;
-      this.coyote = 0;
-      if (this.sliding) {
-        // slide-jump keeps momentum
-        this.he.y = this.heStand;
-        this.pos.y += (this.heStand - this.heSlide) + 0.01;
-        this.sliding = false;
-        this.vel.x = this.slideDir.x * SLIDE_SPEED * 1.15;
-        this.vel.z = this.slideDir.z * SLIDE_SPEED * 1.15;
+    // --- jump / wall jump ---
+    if (input.justPressed('Space')) {
+      if (this.onGround || this.coyote > 0) {
+        this.vel.y = JUMP_V;
+        this.onGround = false;
+        this.coyote = 0;
+        if (this.sliding) {
+          // slide-jump keeps momentum
+          this._stopSlide();
+          this.vel.x = this.slideDir.x * SLIDE_SPEED * 1.15;
+          this.vel.z = this.slideDir.z * SLIDE_SPEED * 1.15;
+        }
+        G.audio.jump();
+      } else if (this.wallJumps > 0 && !this.slamming) {
+        const n = wallNormal(this.pos, this.he, G.colliders);
+        if (n) {
+          this.wallJumps--;
+          this.vel.y = WALL_JUMP_V;
+          // push away from the wall, keeping the tangential part of momentum
+          const along = this.vel.clone().setY(0).addScaledVector(n, -n.dot(this.vel));
+          this.vel.x = along.x * 0.7 + n.x * WALL_JUMP_PUSH;
+          this.vel.z = along.z * 0.7 + n.z * WALL_JUMP_PUSH;
+          G.audio.jump();
+          G.audio._noise(0.1, { freq: 900, gain: 0.2, type: 'highpass' });
+          G.effects.dust(this.pos.clone().addScaledVector(n, -0.4));
+          G.effects.shake(0.04);
+        }
       }
-      G.audio.jump();
     }
 
     // --- horizontal movement ---
@@ -161,11 +206,13 @@ export class Player {
       this.vel.x = wish.x * WALK_SPEED;
       this.vel.z = wish.z * WALK_SPEED;
     } else {
-      // air control
+      // air control: steer freely, but never GAIN speed past the cap —
+      // existing momentum (dash, slide-jump) is preserved
+      const hv0 = Math.hypot(this.vel.x, this.vel.z);
       this.vel.x += wish.x * AIR_ACCEL * dt;
       this.vel.z += wish.z * AIR_ACCEL * dt;
       const hv = Math.hypot(this.vel.x, this.vel.z);
-      const cap = Math.max(WALK_SPEED * 1.4, hv);
+      const cap = Math.max(WALK_SPEED * 1.4, hv0);
       if (hv > cap) { this.vel.x *= cap / hv; this.vel.z *= cap / hv; }
     }
 
@@ -177,8 +224,10 @@ export class Player {
     const preFallV = this.vel.y;
     const res = moveAndCollide(this.pos, this.vel, this.he, dt, G.colliders);
     this.onGround = res.onGround;
+    this.airTime = this.onGround ? 0 : this.airTime + dt;
 
     if (this.onGround && !wasGround) {
+      this.wallJumps = MAX_WALL_JUMPS;
       if (this.slamming) {
         this.slamming = false;
         G.audio.slam();
@@ -192,6 +241,10 @@ export class Player {
             e.damage(40, this.pos, true);
             G.hud.style.add(60, 'SLAM DUNK');
           }
+        }
+        // keep holding slide through a slam to come out of it sliding
+        if (this.slideKeyDown(input) && !this.sliding) {
+          this._startSlide(wish.lengthSq() > 0 ? wish : this.forwardFlat());
         }
       } else if (preFallV < -12) {
         G.audio.land();
@@ -213,6 +266,9 @@ export class Player {
 
     // out of bounds
     if (this.pos.y < HARD_DEATH_Y) this.damage(1000);
+
+    // dynamic FOV: wider while dashing or sliding
+    this.targetFov = 95 + (this.dashT > 0 ? 9 : 0) + (this.sliding ? 5 : 0);
   }
 
   applyToCamera(camera, effects, t) {

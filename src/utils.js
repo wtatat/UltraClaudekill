@@ -22,7 +22,7 @@ export function aabbOverlap(minA, maxA, b) {
 
 const STEP_HEIGHT = 0.55;
 
-function boxFree(pos, he, colliders, skip) {
+export function boxFree(pos, he, colliders, skip) {
   const min = new THREE.Vector3(pos.x - he.x, pos.y - he.y, pos.z - he.z);
   const max = new THREE.Vector3(pos.x + he.x, pos.y + he.y, pos.z + he.z);
   for (const c of colliders) {
@@ -33,8 +33,24 @@ function boxFree(pos, he, colliders, skip) {
 }
 
 // Move a box (center pos, half extents he) axis by axis, sliding along colliders.
-// Low ledges are stepped up automatically (stairs). Returns { onGround, hitCeiling, hitWall }.
+// Low ledges are stepped up automatically (stairs). The move is substepped so
+// fast falls (ground slam) can't tunnel through thin floors.
+// Returns { onGround, hitCeiling, hitWall }.
 export function moveAndCollide(pos, vel, he, dt, colliders) {
+  const maxDisp = Math.max(Math.abs(vel.x), Math.abs(vel.y), Math.abs(vel.z)) * dt;
+  const steps = Math.min(8, Math.max(1, Math.ceil(maxDisp / 0.4)));
+  const res = { onGround: false, hitCeiling: false, hitWall: false };
+  const sub = dt / steps;
+  for (let i = 0; i < steps; i++) {
+    const r = moveStep(pos, vel, he, sub, colliders);
+    res.onGround = res.onGround || r.onGround;
+    res.hitCeiling = res.hitCeiling || r.hitCeiling;
+    res.hitWall = res.hitWall || r.hitWall;
+  }
+  return res;
+}
+
+function moveStep(pos, vel, he, dt, colliders) {
   const res = { onGround: false, hitCeiling: false, hitWall: false };
   const axes = ['x', 'z', 'y']; // horizontal first, then vertical
   const min = new THREE.Vector3(), max = new THREE.Vector3();
@@ -109,6 +125,17 @@ export function raycastLevel(origin, dir, colliders, maxDist = 1000) {
     if (t < best) best = t;
   }
   return best;
+}
+
+// Probe the four horizontal directions for a wall right next to the box.
+// Returns the outward wall normal as a Vector3, or null.
+export function wallNormal(pos, he, colliders, reach = 0.14) {
+  const probe = pos.clone();
+  for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    probe.set(pos.x + dx * reach, pos.y, pos.z + dz * reach);
+    if (!boxFree(probe, he, colliders, null)) return new THREE.Vector3(-dx, 0, -dz);
+  }
+  return null;
 }
 
 // Line of sight between two points against level colliders.

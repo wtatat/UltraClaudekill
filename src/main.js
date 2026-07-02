@@ -6,7 +6,8 @@ import { Player } from './player.js';
 import { Weapons } from './weapons.js';
 import { Level } from './level.js';
 import { Hud, RANKS } from './hud.js';
-import { Projectile } from './enemies.js';
+import { Projectile, prewarmEnemyMeshes } from './enemies.js';
+import { lerp } from './utils.js';
 
 const canvas = document.getElementById('game');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
@@ -91,6 +92,20 @@ G.hud.setObjective('MOVE OUT');
 G.player.pos.set(0, 1.2, 1.5);
 G.player.yaw = 0;
 
+// ---- prewarm: compile every shader and upload every texture during load,
+// so the first shot / spawn / splatter doesn't freeze the game ----
+{
+  const cleanup = prewarmEnemyMeshes(scene);
+  scene.traverse((o) => {
+    if (o.isMesh && o.material && o.material.map) renderer.initTexture(o.material.map);
+  });
+  G.player.applyToCamera(camera, G.effects, 0);
+  G.effects.prewarm(renderer, camera);
+  renderer.compile(scene, camera);
+  renderer.render(scene, camera);
+  cleanup();
+}
+
 // ---- state / overlay wiring ----
 const menu = document.getElementById('menu');
 menu.addEventListener('click', () => {
@@ -126,7 +141,7 @@ document.getElementById('pause-hint').addEventListener('click', () => {
 let last = performance.now();
 function frame(now) {
   requestAnimationFrame(frame);
-  let dt = Math.min((now - last) / 1000, 1 / 25);
+  let dt = Math.min((now - last) / 1000, 1 / 20);
   last = now;
   const t = now / 1000;
 
@@ -145,6 +160,12 @@ function frame(now) {
   }
   G.effects.update(dt);
   G.player.applyToCamera(camera, G.effects, t);
+  // dynamic FOV (dash/slide)
+  const fov = lerp(camera.fov, G.player.targetFov, Math.min(1, dt * 10));
+  if (Math.abs(fov - camera.fov) > 0.01) {
+    camera.fov = fov;
+    camera.updateProjectionMatrix();
+  }
   G.input.endFrame();
   renderer.render(scene, camera);
 }

@@ -36,6 +36,30 @@ function humanoid({ scale = 1, skin = 0xb04a3a, cloth = 0x2a2222, eyes = 0xff220
 
 let nextId = 1;
 
+// Add one hidden instance of every enemy/projectile material to the scene,
+// so their shader programs compile during the loading screen instead of
+// hitching on first spawn. Returns a cleanup function.
+export function prewarmEnemyMeshes(scene) {
+  const stash = [];
+  const dummies = [
+    humanoid({ skin: 0xc4574a, cloth: 0x33201c, eyes: 0xffcc00 }),
+    humanoid({ scale: 1.9, skin: 0x8a2020, cloth: 0x151015, eyes: 0xff5500 }),
+  ];
+  const orb = new THREE.Mesh(new THREE.OctahedronGeometry(0.2, 0), new THREE.MeshBasicMaterial({ color: 0x44ddff }));
+  const halo = new THREE.Mesh(
+    new THREE.OctahedronGeometry(0.4, 0),
+    new THREE.MeshBasicMaterial({ color: 0x44ddff, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false })
+  );
+  orb.add(halo);
+  dummies.push(orb);
+  for (const d of dummies) {
+    d.position.set(0, 1, -2);
+    scene.add(d);
+    stash.push(d);
+  }
+  return () => { for (const d of stash) scene.remove(d); };
+}
+
 class EnemyBase {
   constructor(G, pos) {
     this.G = G;
@@ -322,11 +346,17 @@ export class Projectile {
     this.dead = false;
     this.friendly = false;
     this.life = 8;
+    this.color = color;
+    // no per-projectile PointLight: adding/removing lights forces a full
+    // shader recompile, which caused big hitches — use an additive halo instead
     const mat = new THREE.MeshBasicMaterial({ color });
     this.mesh = new THREE.Mesh(new THREE.OctahedronGeometry(radius, 0), mat);
+    const halo = new THREE.Mesh(
+      new THREE.OctahedronGeometry(radius * 1.9, 0),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false })
+    );
+    this.mesh.add(halo);
     this.mesh.position.copy(pos);
-    this.light = new THREE.PointLight(color, 8, 6);
-    this.mesh.add(this.light);
     G.scene.add(this.mesh);
   }
 
@@ -342,7 +372,7 @@ export class Projectile {
     if (this.dead) return;
     this.dead = true;
     this.G.effects.sparks(this.pos);
-    this.G.effects.flash(this.pos, this.light.color.getHex(), 20, 0.1);
+    this.G.effects.flash(this.pos, this.color, 20, 0.1);
     this.G.scene.remove(this.mesh);
   }
 
