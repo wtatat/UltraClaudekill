@@ -65,14 +65,23 @@ python3 -m http.server 8000
   - *Malicious Face* — floating stone head boss. Alternates a 10-orb
     barrage (parryable) with a telegraphed beam (dodge it — dash). Below
     half health it enrages and fires double beams.
-- **The level** follows the original 0-1 room sequence: drop shaft →
-  "KEEP OUT" planks (punch through) → jammed doors (slide the gap) →
-  collapsed walkway (dash across) → the dark **Revolver Room** (lights
-  snap on when you take the gun; then the Filth come) → three **Glass
-  Rooms** with a checkpoint → the **Grinder Walkway** (glass over
-  grinders; drop 5 enemies in for the challenge) → the **Turbine
-  Chamber** → the boss and the exit elevator. **5 secrets** (+10 max HP
-  each). Checkpoints respawn you on death.
+- **The level** opens with the original 0-1 room sequence and keeps
+  going: drop shaft → "KEEP OUT" planks (punch through) → jammed doors
+  (slide the gap) → collapsed walkway (dash across) → the dark
+  **Revolver Room** (lights snap on when you take the gun; then the
+  Filth come) → three **Glass Rooms** with a checkpoint → the **Grinder
+  Walkway** (glass over grinders; drop 5 enemies in for the challenge)
+  → the **Turbine Chamber** → the **Armory** (the shotgun, and the
+  ambush it springs) → the **Climb Shaft** (wall-jump up under fire) →
+  the **Lava Lake** (a narrow bridge, Filth pouring across it, Strays
+  on the pillars) → the **Last Gauntlet** (three waves) → the boss and
+  the exit elevator. **7 secrets** (+10 max HP each). Checkpoints
+  respawn you on death.
+- Enemies have ledge sense: they walk edges to find bridges instead of
+  sprinting into lava — unless you break the floor from under them.
+
+The RL sandbox from an earlier experiment lives in `archive/rl.html`
+(see git history for details).
 
 ## RL Lab — an agent that learns to play
 

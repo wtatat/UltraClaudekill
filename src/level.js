@@ -106,7 +106,7 @@ export class Level {
     this.hazardKills = 0;
     this.challengeDone = false;
     this.secretsFound = 0;
-    this.secretsTotal = 5;
+    this.secretsTotal = 7;
     this._buildMaterials();
     this._build();
   }
@@ -335,7 +335,8 @@ export class Level {
     }
     mesh.position.set(x, y, z);
     this.G.scene.add(mesh);
-    this.pickups.push({ mesh, r: kind === 'revolver' ? 1.9 : 1.2, fn, taken: false, baseY: y });
+    const r = (kind === 'revolver' || kind === 'shotgun') ? 1.9 : 1.2;
+    this.pickups.push({ mesh, r, fn, taken: false, baseY: y });
   }
 
   spawnRoom(name, list) {
@@ -755,34 +756,196 @@ export class Level {
     this.rooms.tc = { alive: new Set(), door: doorTC };
     this.checkpoint(-6, 0, -144);
 
-    // ---- B. boss room + exit elevator (z -160 .. -180) ----
-    // (front wall at z=-160 is shared with the turbine chamber's back wall)
-    this.floorCeil(0, -170, 20, 20, 0, 11);
-    this.box(-10.5, 5.5, -170, 1, 11, 20, 'brick');
-    this.box(10.5, 5.5, -170, 1, 11, 20, 'brick');
-    this.box(-6.5, 5.5, -180, 8, 11, 1, 'brick');
-    this.box(6.5, 5.5, -180, 8, 11, 1, 'brick');
-    this.box(0, 7.25, -180, 6, 7.5, 1, 'brick');
-    this.light(0, 8, -170, 0xff5533, 30, 30);
-    this.torch(-9.8, 2, -164); this.torch(9.8, 2, -164);
-    this.torch(-9.8, 2, -176); this.torch(9.8, 2, -176);
-    this.pickup(-8, 0.8, -170, 'health');
-    this.pickup(8, 0.8, -170, 'health');
-    const doorBoss = this.door(0, 2.25, -180, 5.5, 4.5, 0.8, 'boss');
-    this.rooms.boss = { alive: new Set(), door: doorBoss };
-    this.trigger(0, 2, -163, 14, 6, 3, () => {
-      G.hud.message('SOMETHING WICKED', 3000);
-      G.hud.setObjective('DODGE THE BEAM. PARRY THE ORBS');
-      this.spawnRoom('boss', [[MaliciousFace, 0, 4.5, -173]]);
+    // ---- W1. armory (z -160 .. -176, 18 wide): the shotgun, and a price ----
+    this.floorCeil(0, -168, 18, 16, 0, 7);
+    this.box(-9.5, 3.5, -168, 1, 7, 16, 'brick');
+    this.box(9.5, 3.5, -168, 1, 7, 16, 'brick');
+    this.box(-5.75, 3.5, -176, 7.5, 7, 1, 'brick');
+    this.box(5.75, 3.5, -176, 7.5, 7, 1, 'brick');
+    this.box(0, 5, -176, 4, 4, 1, 'brick');
+    this.light(0, 5.5, -168, 0xff7744, 20, 20);
+    this.torch(-8.8, 1.6, -164); this.torch(8.8, 1.6, -172);
+    this.checkpoint(0, 0, -162);
+    // weapon racks (decor)
+    this.box(-8.9, 1.2, -168, 0.4, 2.4, 5, 'panel');
+    this.box(8.9, 1.2, -168, 0.4, 2.4, 5, 'panel');
+    // shotgun pedestal
+    this.box(0, 0.5, -168, 1.6, 1, 1.6, 'panel');
+    this.box(0, 1.15, -168, 1.2, 0.3, 1.2, 'trim');
+    this.pickup(0, 1.8, -168, 'shotgun');
+    const doorW1 = this.door(0, 1.6, -176, 4.2, 3.2, 0.8, 'w1');
+    this.rooms.w1 = { alive: new Set(), door: doorW1 };
+    // taking the shotgun springs the ambush
+    {
+      const sp = this.pickups[this.pickups.length - 1];
+      const orig = sp.fn;
+      sp.fn = () => {
+        orig();
+        G.hud.message('AN AMBUSH. OBVIOUSLY');
+        G.hud.setObjective('TRY THE NEW TOY');
+        G.audio.wardenRoar();
+        this.spawnRoom('w1', [
+          [Filth, -7, 1, -163], [Filth, 7, 1, -163],
+          [Filth, -7, 1, -173], [Filth, 7, 1, -173],
+          [Stray, 0, 1, -174],
+        ]);
+      };
+    }
+    this.trigger(0, 2, -162, 12, 5, 3, () => {
+      G.hud.message('AN ARMORY');
+      G.hud.setObjective('TAKE THE SHOTGUN');
     });
 
-    // exit elevator (z -180 .. -186)
-    this.floorCeil(0, -183, 6, 6, 0, 4);
-    this.box(-3.5, 2, -183, 1, 4, 6, 'panel');
-    this.box(3.5, 2, -183, 1, 4, 6, 'panel');
-    this.box(0, 2, -186.5, 6, 4, 1, 'panel');
-    this.light(0, 3.2, -183, 0x9fdcff, 16, 10);
-    this.trigger(0, 2, -184, 5, 4, 3, () => G.onLevelComplete(), 'exit');
+    // ---- W2. climb shaft (z -176 .. -190, 14 wide, tall): wall-jump up ----
+    this.floorCeil(0, -183, 14, 14, 0, 13);
+    this.box(0, 10, -176, 14, 6, 1, 'brick'); // seal above the armory doorway
+    this.box(-7.5, 6.5, -183, 1, 13, 14, 'brick');
+    this.box(7.5, 6.5, -183, 1, 13, 14, 'brick');
+    // back wall with a HIGH opening (x -2.5..2.5, y 7..10.5)
+    this.box(0, 3.5, -190, 14, 7, 1, 'brick');
+    this.box(-5, 8.75, -190, 5, 3.5, 1, 'brick');
+    this.box(5, 8.75, -190, 5, 3.5, 1, 'brick');
+    this.box(0, 11.75, -190, 14, 2.5, 1, 'brick');
+    // climbing ledges, alternating walls
+    this.box(-5, 1.5, -180, 4, 0.6, 3, 'panel');
+    this.box(5, 3.3, -182, 4, 0.6, 3, 'panel');
+    this.box(-5, 5.1, -185, 4, 0.6, 3, 'panel');
+    this.box(5, 6.9, -187, 4, 0.6, 3, 'panel');
+    this.box(0, 6.6, -188.8, 5, 0.8, 2.2, 'panel'); // exit ledge at the gap
+    this.light(0, 10, -183, 0xff6633, 18, 20);
+    this.torch(-6.8, 2, -179); this.torch(6.8, 5, -186);
+    // defenders
+    this.box(6, 4.5, -179.5, 2.5, 9, 2.5, 'brick'); // stray tower
+    const doorW2 = this.door(0, 8.75, -190, 5.2, 3.5, 0.8, 'w2');
+    this.rooms.w2 = { alive: new Set(), door: doorW2 };
+    this.trigger(0, 2, -178, 12, 5, 3, () => {
+      G.hud.message('THE ONLY WAY IS UP');
+      G.hud.setObjective('WALL JUMP. CLING. CLIMB');
+      this.spawnRoom('w2', [
+        [Stray, 6, 9.9, -179.5],
+        [Filth, -4, 1, -186], [Filth, 4, 1, -185],
+      ]);
+    });
+    // secret 6: shelf right under the ceiling
+    this.box(-6, 11, -188, 2, 0.4, 2, 'panel');
+    this.pickup(-6, 11.8, -188, 'secret');
+
+    // ---- W3. lava lake with a narrow bridge (z -190 .. -216, 20 wide) ----
+    this.box(-10.5, 5.5, -203, 1, 15, 26, 'brick');
+    this.box(10.5, 5.5, -203, 1, 15, 26, 'brick');
+    this.box(0, 12.5, -203, 20, 1, 26, 'dark'); // ceiling
+    // front wall strips beside the W2 shaft (W2's back wall covers the middle)
+    this.box(-8.75, 6, -190, 3.5, 14, 1, 'brick');
+    this.box(8.75, 6, -190, 3.5, 14, 1, 'brick');
+    // entry balcony at y7, stairs down along the left wall
+    this.box(0, 6.5, -191.8, 20, 1, 3.6, 'floor');
+    for (let i = 0; i < 13; i++) {
+      this.box(-8.5, 6.45 - 0.5 - i * 0.5, -194 - i * 0.7, 3, 1, 1.4, 'floor');
+    }
+    // the lake: solid bed below, glowing surface, hazard zone above it
+    this.box(0, -1.2, -204.8, 20, 1, 22.4, 'floor');
+    this.box(0, 0.02, -204.8, 20, 0.12, 22.4, 'lava', { collide: false });
+    this.hazards.push({ min: new THREE.Vector3(-10, -1, -216), max: new THREE.Vector3(10, 0.5, -193.6), dmg: 15 });
+    // shore by the stairs, spur, and the narrow bridge across
+    this.box(-7.5, 0.1, -201.5, 6, 1, 6, 'floor');
+    this.box(-3.5, 0.1, -202.5, 4, 1, 2.4, 'floor');
+    this.box(0, 0.1, -205, 2.4, 1, 22, 'floor');
+    // stray pillars rising from the lava
+    this.box(-6, 1.5, -208, 2.5, 3, 2.5, 'brick');
+    this.box(6, 1.5, -200, 2.5, 3, 2.5, 'brick');
+    // far landing and back wall
+    this.box(0, 0.1, -214.5, 20, 1, 3, 'floor');
+    this.box(-6.25, 6, -216, 8.5, 12, 1, 'brick');
+    this.box(6.25, 6, -216, 8.5, 12, 1, 'brick');
+    this.box(0, 8, -216, 4, 8, 1, 'brick');
+    this.light(0, 3, -203, 0xff4400, 26, 26);
+    this.light(0, 9, -196, 0xff6633, 14, 16);
+    const doorW3 = this.door(0, 2.3, -216, 4.2, 3.4, 0.8, 'w3');
+    this.rooms.w3 = { alive: new Set(), door: doorW3 };
+    this.trigger(0, 7.5, -191.5, 16, 4, 3, () => {
+      G.hud.message('CROSS THE LAKE');
+      G.hud.setObjective('DO NOT SWIM');
+      this.spawnRoom('w3', [
+        [Stray, -6, 4, -208], [Stray, 6, 4, -200],
+        [Filth, -6, 1.8, -214.5], [Filth, -2, 1.8, -214.5],
+        [Filth, 2, 1.8, -214.5], [Filth, 6, 1.8, -214.5],
+      ]);
+    });
+    // secret 7: lone island off the bridge — dash for it
+    this.box(8, 0.1, -212, 2, 1, 2, 'floor');
+    this.pickup(8, 1.3, -212, 'secret');
+
+    // ---- W4. penultimate arena (z -216 .. -236, 20x20): three waves ----
+    this.floorCeil(0, -226, 20, 20, 0, 10);
+    this.box(-10.5, 5, -226, 1, 10, 20, 'brick');
+    this.box(10.5, 5, -226, 1, 10, 20, 'brick');
+    this.box(-6.5, 5, -236, 8, 10, 1, 'brick');
+    this.box(6.5, 5, -236, 8, 10, 1, 'brick');
+    this.box(0, 7, -236, 6, 6, 1, 'brick');
+    for (const [px, pz] of [[-6, -221], [6, -221], [-6, -231], [6, -231]]) {
+      this.box(px, 2.5, pz, 1.5, 5, 1.5, 'brick');
+    }
+    this.box(-8, 1.25, -226, 2.5, 2.5, 2.5, 'panel'); // stray ledges
+    this.box(8, 1.25, -226, 2.5, 2.5, 2.5, 'panel');
+    this.light(0, 8, -226, 0xff5533, 26, 28);
+    this.torch(-9.8, 2, -220); this.torch(9.8, 2, -232);
+    this.checkpoint(0, 0, -218);
+    this.pickup(-8.5, 0.8, -233, 'health');
+    this.pickup(8.5, 0.8, -219, 'health');
+    const doorW4 = this.door(0, 2, -236, 5.2, 4, 0.8, 'w4');
+    this.rooms.w4 = { alive: new Set(), door: doorW4 };
+    this.trigger(0, 2, -220, 14, 5, 3, () => {
+      G.hud.message('THE LAST GAUNTLET');
+      G.hud.setObjective('SURVIVE THE WAVES');
+      G.audio.wardenRoar();
+      this.spawnRoom('w4', [
+        [Filth, -7, 1, -229], [Filth, 7, 1, -229], [Filth, 0, 1, -232],
+        [Filth, -4, 1, -224], [Filth, 4, 1, -224],
+      ]);
+      this.rooms.w4.next = () => {
+        G.hud.message('WAVE 2');
+        this.spawnRoom('w4', [
+          [Stray, -8, 3.4, -226], [Stray, 8, 3.4, -226],
+          [Filth, -5, 1, -231], [Filth, 5, 1, -231], [Filth, 0, 1, -222],
+        ]);
+        this.rooms.w4.next = () => {
+          G.hud.message('LAST OF THEM');
+          this.spawnRoom('w4', [
+            [Filth, -7, 1, -222], [Filth, 7, 1, -222], [Filth, -7, 1, -230],
+            [Filth, 7, 1, -230], [Filth, -2, 1, -233], [Filth, 2, 1, -233],
+          ]);
+        };
+      };
+    });
+
+    // ---- B. boss room + exit elevator (z -236 .. -256) ----
+    this.floorCeil(0, -246, 20, 20, 0, 11);
+    this.box(0, 10.75, -236, 20, 1.5, 1, 'brick'); // filler above the shared wall
+    this.box(-10.5, 5.5, -246, 1, 11, 20, 'brick');
+    this.box(10.5, 5.5, -246, 1, 11, 20, 'brick');
+    this.box(-6.5, 5.5, -256, 8, 11, 1, 'brick');
+    this.box(6.5, 5.5, -256, 8, 11, 1, 'brick');
+    this.box(0, 7.25, -256, 6, 7.5, 1, 'brick');
+    this.light(0, 8, -246, 0xff5533, 30, 30);
+    this.torch(-9.8, 2, -240); this.torch(9.8, 2, -240);
+    this.torch(-9.8, 2, -252); this.torch(9.8, 2, -252);
+    this.pickup(-8, 0.8, -246, 'health');
+    this.pickup(8, 0.8, -246, 'health');
+    const doorBoss = this.door(0, 2.25, -256, 5.5, 4.5, 0.8, 'boss');
+    this.rooms.boss = { alive: new Set(), door: doorBoss };
+    this.trigger(0, 2, -239, 14, 6, 3, () => {
+      G.hud.message('SOMETHING WICKED', 3000);
+      G.hud.setObjective('DODGE THE BEAM. PARRY THE ORBS');
+      this.spawnRoom('boss', [[MaliciousFace, 0, 4.5, -249]]);
+    });
+
+    // exit elevator (z -256 .. -262)
+    this.floorCeil(0, -259, 6, 6, 0, 4);
+    this.box(-3.5, 2, -259, 1, 4, 6, 'panel');
+    this.box(3.5, 2, -259, 1, 4, 6, 'panel');
+    this.box(0, 2, -262.5, 6, 4, 1, 'panel');
+    this.light(0, 3.2, -259, 0x9fdcff, 16, 10);
+    this.trigger(0, 2, -260, 5, 4, 3, () => G.onLevelComplete(), 'exit');
 
     // global fill lights
     const amb = new THREE.AmbientLight(0x664422, 1.5);

@@ -79,9 +79,9 @@ const G = {
     const style = Math.round(G.hud.style.total);
     // final rank from total style, with time bonus
     let rankIdx = 0;
-    const thresholds = [0, 400, 800, 1300, 1900, 2600, 3400, 4300];
+    const thresholds = [0, 600, 1300, 2200, 3300, 4600, 6200, 8000];
     for (let i = 0; i < thresholds.length; i++) if (style >= thresholds[i]) rankIdx = i;
-    if (time < 180 && rankIdx < RANKS.length - 1) rankIdx++;
+    if (time < 330 && rankIdx < RANKS.length - 1) rankIdx++;
     const r = RANKS[rankIdx];
     document.getElementById('win-time').textContent = `${mm}:${ss}`;
     document.getElementById('win-kills').textContent = G.kills;

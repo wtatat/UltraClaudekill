@@ -198,7 +198,7 @@ document.getElementById('btn-load').onclick = async () => {
   const saved = localStorage.getItem('ultraclaudekill-rl');
   if (saved) { agent.load(saved); ui.mode.textContent = 'LOADED (local)'; return; }
   try {
-    const res = await fetch('./assets/rl-weights.json');
+    const res = await fetch('../assets/rl-weights.json');
     if (res.ok) { agent.load(await res.json()); ui.mode.textContent = 'LOADED (pretrained)'; }
     else ui.mode.textContent = 'NO WEIGHTS FOUND';
   } catch { ui.mode.textContent = 'NO WEIGHTS FOUND'; }
@@ -208,7 +208,7 @@ document.getElementById('btn-load').onclick = async () => {
 if (new URLSearchParams(location.search).get('mode') === 'play') {
   (async () => {
     try {
-      const res = await fetch('./assets/rl-weights.json');
+      const res = await fetch('../assets/rl-weights.json');
       if (res.ok) agent.load(await res.json());
     } catch { /* train from scratch */ }
     S.mode = 'watch';

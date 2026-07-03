@@ -169,6 +169,26 @@ class EnemyBase {
 
   onParried() {}
 
+  // Ledge sense: never sprint off a big drop. If the ground ahead falls
+  // away, try rotated directions (walk along the edge) before giving up —
+  // this is how Filth find the bridge instead of diving into the lava.
+  safeMove(move) {
+    if (move.lengthSq() < 1e-6) return move;
+    const down = new THREE.Vector3(0, -1, 0);
+    const probe = new THREE.Vector3();
+    for (const ang of [0, 0.9, -0.9, 1.7, -1.7]) {
+      const c = Math.cos(ang), s = Math.sin(ang);
+      const mx = move.x * c - move.z * s;
+      const mz = move.x * s + move.z * c;
+      probe.set(this.pos.x + mx * 1.2, this.pos.y, this.pos.z + mz * 1.2);
+      const drop = raycastLevel(probe, down, this.G.colliders, 6);
+      if (drop < this.he.y + 1.15) {
+        return ang === 0 ? move : new THREE.Vector3(mx, 0, mz);
+      }
+    }
+    return new THREE.Vector3(0, 0, 0); // cliff everywhere: hold position
+  }
+
   // Local avoidance: bend the desired direction sideways around packmates
   // blocking the path. Disabled at close range so bodies never get in the
   // way of an attack.
@@ -293,9 +313,16 @@ export class Filth extends EnemyBase {
       } else {
         // accelerates toward the player instead of turning on a dime,
         // so it overshoots slightly when you dodge sideways
-        const move = this.steer(toP, dist);
-        this.vel.x += move.x * this.accel * dt;
-        this.vel.z += move.z * this.accel * dt;
+        const steered = this.steer(toP, dist);
+        const move = this.safeMove(steered);
+        if (move !== steered) {
+          // cliff ahead: momentum must not carry it over — walk the edge
+          this.vel.x = move.x * this.speed * 0.6;
+          this.vel.z = move.z * this.speed * 0.6;
+        } else {
+          this.vel.x += move.x * this.accel * dt;
+          this.vel.z += move.z * this.accel * dt;
+        }
         const hv = Math.hypot(this.vel.x, this.vel.z);
         if (hv > this.speed) { this.vel.x *= this.speed / hv; this.vel.z *= this.speed / hv; }
       }
@@ -402,7 +429,7 @@ export class Stray extends EnemyBase {
       if (!los || dist > 30) move = toP;                        // can't see / too far: approach
       else if (dist < 9) move = toP.clone().negate();           // too close: slow backpedal
       if (move) {
-        move = this.steer(move, dist);
+        move = this.safeMove(this.steer(move, dist));
         const speed = dist < 9 ? 2.2 : 4.5;
         this.vel.x += (move.x * speed - this.vel.x) * Math.min(1, dt * 6);
         this.vel.z += (move.z * speed - this.vel.z) * Math.min(1, dt * 6);
