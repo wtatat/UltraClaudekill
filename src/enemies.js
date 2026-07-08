@@ -159,9 +159,24 @@ class EnemyBase {
     this.G.onEnemyKilled(this);
   }
 
-  faceThePlayer() {
+  // Smoothly rotate the body toward an angle (wrapped), so turns read as
+  // turns instead of the mesh snapping while the body slides sideways.
+  faceAngle(target, dt, rate = 14) {
+    const cur = this.mesh.rotation.y;
+    let d = target - cur;
+    d = ((d + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
+    this.mesh.rotation.y = cur + d * Math.min(1, dt * rate);
+  }
+
+  faceThePlayer(dt = 1, rate = 14) {
     const p = this.G.player.pos;
-    this.mesh.rotation.y = Math.atan2(p.x - this.pos.x, p.z - this.pos.z);
+    this.faceAngle(Math.atan2(p.x - this.pos.x, p.z - this.pos.z), dt, rate);
+  }
+
+  // face where the body is actually going (kills the "running sideways" look)
+  faceMovement(dt) {
+    if (Math.hypot(this.vel.x, this.vel.z) < 2) return this.faceThePlayer(dt);
+    this.faceAngle(Math.atan2(this.vel.x, this.vel.z), dt);
   }
 
   // true while the enemy is winding up a parryable attack
@@ -251,7 +266,7 @@ export class Filth extends EnemyBase {
     super(G, pos);
     this.hp = this.maxHp = 24; // one clean revolver shot
     this.speed = randRange(13, 14.5);
-    this.accel = 30;
+    this.walkPhase = Math.random() * 6;
     this.styleValue = 100;
     this.name = 'FILTH';
     this.mesh = humanoid({ skin: 0x7d9a5a, cloth: 0x3a4230, arms: false, mouth: true });
@@ -311,8 +326,6 @@ export class Filth extends EnemyBase {
         this.windup = 0.35;
         this.G.audio._tone(0.25, { from: 400, to: 950, type: 'sawtooth', gain: 0.12 }); // hiss (no parry ping: not parryable)
       } else {
-        // accelerates toward the player instead of turning on a dime,
-        // so it overshoots slightly when you dodge sideways
         const steered = this.steer(toP, dist);
         const move = this.safeMove(steered);
         if (move !== steered) {
@@ -320,8 +333,11 @@ export class Filth extends EnemyBase {
           this.vel.x = move.x * this.speed * 0.6;
           this.vel.z = move.z * this.speed * 0.6;
         } else {
-          this.vel.x += move.x * this.accel * dt;
-          this.vel.z += move.z * this.accel * dt;
+          // exponential approach to the target velocity: a touch of weight
+          // on speed-up, but turns bite instead of ice-skating past you
+          const k = Math.min(1, dt * 7);
+          this.vel.x += (move.x * this.speed - this.vel.x) * k;
+          this.vel.z += (move.z * this.speed - this.vel.z) * k;
         }
         const hv = Math.hypot(this.vel.x, this.vel.z);
         if (hv > this.speed) { this.vel.x *= this.speed / hv; this.vel.z *= this.speed / hv; }
@@ -333,9 +349,15 @@ export class Filth extends EnemyBase {
     if (res.hitWall && res.onGround && this.lungeT <= 0 && this.windup <= 0) this.vel.y = 8;
 
     this.mesh.position.copy(this.pos).y = this.pos.y - this.he.y;
-    this.faceThePlayer();
+    // face the player only when committed to it; otherwise face where
+    // the body is going, so detours don't read as sideways drifting
+    if (this.windup > 0 || this.lungeT > 0 || dist < 4.5) this.faceThePlayer(dt);
+    else this.faceMovement(dt);
     const parts = this.mesh.userData.parts;
-    const sw = Math.sin(this.animT * 11) * 0.6;
+    // legs pump at the pace the body actually moves — no moonwalking
+    const hSpd = Math.hypot(this.vel.x, this.vel.z);
+    this.walkPhase += dt * (2 + hSpd * 0.9);
+    const sw = Math.sin(this.walkPhase) * 0.6 * Math.min(1, hSpd / 5);
     parts.legL.rotation.x = sw; parts.legR.rotation.x = -sw;
     parts.head.rotation.x = this.windup > 0 ? -0.5 : 0; // rears back to bite
     this.mesh.rotation.x = this.lungeT > 0 ? 0.35 : 0;
@@ -431,11 +453,13 @@ export class Stray extends EnemyBase {
       if (move) {
         move = this.safeMove(this.steer(move, dist));
         const speed = dist < 9 ? 2.2 : 4.5;
-        this.vel.x += (move.x * speed - this.vel.x) * Math.min(1, dt * 6);
-        this.vel.z += (move.z * speed - this.vel.z) * Math.min(1, dt * 6);
+        this.vel.x += (move.x * speed - this.vel.x) * Math.min(1, dt * 10);
+        this.vel.z += (move.z * speed - this.vel.z) * Math.min(1, dt * 10);
       } else {
-        this.vel.x *= Math.max(0, 1 - dt * 8);
-        this.vel.z *= Math.max(0, 1 - dt * 8);
+        // plant hard: no gliding to a stop
+        this.vel.x *= Math.max(0, 1 - dt * 16);
+        this.vel.z *= Math.max(0, 1 - dt * 16);
+        if (Math.hypot(this.vel.x, this.vel.z) < 0.2) { this.vel.x = 0; this.vel.z = 0; }
       }
       this.attackCd -= dt;
       if (los && dist < 32 && this.attackCd <= 0) {
@@ -449,11 +473,14 @@ export class Stray extends EnemyBase {
     // no hop: a Stray never jumps
 
     this.mesh.position.copy(this.pos).y = this.pos.y - this.he.y;
-    this.faceThePlayer();
+    // face the player when it can see them, else face where it's walking
+    if (los || this.chargeT > 0) this.faceThePlayer(dt);
+    else this.faceMovement(dt);
     const parts = this.mesh.userData.parts;
     parts.armR.rotation.x = this.chargeT > 0 ? -2.2 : -1.4;
     const hSpd = Math.hypot(this.vel.x, this.vel.z);
-    const sw = hSpd > 0.5 ? Math.sin(this.animT * 6) * 0.3 : 0;
+    this.walkPhase = (this.walkPhase || 0) + dt * (1.5 + hSpd * 1.2);
+    const sw = Math.sin(this.walkPhase) * 0.3 * Math.min(1, hSpd / 2);
     parts.legL.rotation.x = sw; parts.legR.rotation.x = -sw;
     this.updateFlash(dt);
   }
@@ -567,7 +594,7 @@ export class MaliciousFace extends EnemyBase {
     this.vel.y = clamp((hoverY + clamp(P.pos.y - 1, 0, 3) - this.pos.y) * 1.5, -3, 3);
     moveAndCollide(this.pos, this.vel, this.he, dt, G.colliders);
     this.mesh.position.copy(this.pos);
-    this.faceThePlayer();
+    this.faceThePlayer(dt, 6); // ponderous stone head, slow turn
 
     this.stateT -= dt;
     if (this.state === 'drift') {
